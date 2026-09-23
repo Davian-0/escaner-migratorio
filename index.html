@@ -236,7 +236,7 @@
 
   <footer>
     Los datos se procesan en este mismo celular — no se envían a ningún servidor. Prototipo interno, Regional Nariño-Putumayo.<br>
-    <span class="mono" id="buildTag" style="font-size:.7rem;">build 2026-09-24c</span>
+    <span class="mono" id="buildTag" style="font-size:.7rem;">build 2026-09-24d</span>
     · <a href="#" id="resetCacheLink">Limpiar caché de la app</a>
   </footer>
 </main>
@@ -392,9 +392,14 @@
   // alguna de las etiquetas conocidas (en cualquiera de los idiomas/variantes de la
   // lista), tolerando hasta ~40% de letras distintas - y extrae el valor que sigue.
   function findFuzzyLabelValue(text, labelWords, maxLen){
+    // el OCR a veces mete un simbolo suelto (":" ";" ".") DENTRO de la palabra de la
+    // etiqueta (ej. "Apell:dos"), lo que la parte en dos pedazos para la busqueda por
+    // palabras - se eliminan esos simbolos (no los espacios/saltos de linea) para que
+    // la etiqueta quede como una sola palabra otra vez.
+    var clean = text.replace(/[:;.,]/g, '');
     var tokenRe = /[A-ZÑÁÉÍÓÚ]{3,}/g;
     var m, best = null;
-    while ((m = tokenRe.exec(text))) {
+    while ((m = tokenRe.exec(clean))) {
       var word = m[0];
       for (var i=0;i<labelWords.length;i++){
         var lbl = labelWords[i];
@@ -406,7 +411,7 @@
       }
     }
     if (!best) return '';
-    return extractValueAfter(text, best.end, maxLen);
+    return extractValueAfter(clean, best.end, maxLen);
   }
 
   // fecha con mes en letras (ej. "03 DIC 2000", formato estandar de la cedula colombiana)
