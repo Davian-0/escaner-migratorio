@@ -226,7 +226,7 @@
 
   <footer>
     Los datos se procesan en este mismo celular — no se envían a ningún servidor. Prototipo interno, Regional Nariño-Putumayo.<br>
-    <span class="mono" id="buildTag" style="font-size:.7rem;">build 2026-09-23d</span>
+    <span class="mono" id="buildTag" style="font-size:.7rem;">build 2026-09-23e</span>
     · <a href="#" id="resetCacheLink">Limpiar caché de la app</a>
   </footer>
 </main>
@@ -325,8 +325,26 @@
     var stop = stopRegex.exec(slice);
     var raw = stop ? slice.slice(0, stop.index) : slice;
     raw = raw.replace(/[^A-ZÑÁÉÍÓÚ \n]/g, ' ');
-    var lines = raw.split('\n').map(function(l){ return l.trim(); }).filter(Boolean);
-    return lines.join(' ').replace(/\s+/g,' ').trim();
+    // el OCR suele meter ruido entre la etiqueta y el dato real (ej. "NUIP 1.193.385.571"
+    // antes de "MORAN MAYA") - el valor real casi siempre es la ULTIMA linea limpia
+    // antes de la siguiente etiqueta, no la primera.
+    var lines = raw.split('\n').map(function(l){ return l.trim().replace(/\s+/g,' '); }).filter(function(l){ return l.length>1; });
+    return lines.length ? lines[lines.length-1] : '';
+  }
+
+  // fecha con mes en letras (ej. "03 DIC 2000", formato estandar de la cedula colombiana)
+  // o con separadores numericos (03/12/2000), buscada cerca de una etiqueta especifica
+  // (para no confundir fecha de nacimiento con fecha de expedicion, que tienen el mismo formato)
+  var MONTH_MAP = {ENE:'01',FEB:'02',MAR:'03',ABR:'04',MAY:'05',JUN:'06',JUL:'07',AGO:'08',SEP:'09',OCT:'10',NOV:'11',DIC:'12'};
+  function findDateNear(text, labelRegex, windowLen){
+    var m = labelRegex.exec(text);
+    if (!m) return '';
+    var slice = text.slice(m.index, m.index + (windowLen || 90));
+    var mm = slice.match(/(\d{1,2})\s+(ENE|FEB|MAR|ABR|MAY|JUN|JUL|AGO|SEP|OCT|NOV|DIC)\w*\s+(\d{4})/);
+    if (mm) return mm[1].padStart(2,'0') + '/' + MONTH_MAP[mm[2]] + '/' + mm[3];
+    var nm = slice.match(/(\d{2})[\/\-.](\d{2})[\/\-.](\d{2,4})/);
+    if (nm) { var yr = nm[3].length===2 ? '19'+nm[3] : nm[3]; return nm[1]+'/'+nm[2]+'/'+yr; }
+    return '';
   }
 
   function guessFromText(text){
@@ -344,11 +362,16 @@
     });
     guess.num = bestNum;
 
-    // fecha
-    var fechaMatch = upper.match(/(\d{2})[\/\-.](\d{2})[\/\-.](\d{2,4})/);
-    if (fechaMatch) {
-      var yr = fechaMatch[3].length === 2 ? '19' + fechaMatch[3] : fechaMatch[3];
-      guess.fecha = fechaMatch[1] + '/' + fechaMatch[2] + '/' + yr;
+    // fecha de nacimiento: anclada a la etiqueta "NACIMIENTO" para no confundirla con
+    // la fecha de expedicion, que tiene el mismo formato mas abajo en el documento
+    guess.fecha = findDateNear(upper, /NACIMIENTO/, 90);
+    if (!guess.fecha) {
+      // respaldo: si no encontro la etiqueta, toma la primera fecha que aparezca en el texto
+      var anyDate = upper.match(/(\d{1,2})\s+(ENE|FEB|MAR|ABR|MAY|JUN|JUL|AGO|SEP|OCT|NOV|DIC)\w*\s+(\d{4})/) || upper.match(/(\d{2})[\/\-.](\d{2})[\/\-.](\d{2,4})/);
+      if (anyDate) {
+        if (anyDate[2] && MONTH_MAP[anyDate[2]]) guess.fecha = anyDate[1].padStart(2,'0') + '/' + MONTH_MAP[anyDate[2]] + '/' + anyDate[3];
+        else { var yr2 = anyDate[3].length===2 ? '19'+anyDate[3] : anyDate[3]; guess.fecha = anyDate[1]+'/'+anyDate[2]+'/'+yr2; }
+      }
     }
 
     // sexo
