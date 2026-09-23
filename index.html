@@ -56,6 +56,13 @@
   .capture-zone .hint{color:var(--ink-faint);font-size:.8rem;margin-top:4px;}
   #fileInput{display:none;}
 
+  /* --- crop --- */
+  .crop-hint{color:var(--ink-soft);font-size:.86rem;margin:0 0 12px;}
+  .crop-canvas-wrap{position:relative;touch-action:none;border-radius:12px;overflow:hidden;background:#000;}
+  .crop-canvas-wrap canvas{display:block;width:100%;touch-action:none;}
+  .crop-actions{display:flex;gap:10px;margin-top:12px;}
+  .crop-actions .btn{flex:1;}
+
   .preview-wrap{display:flex;gap:12px;align-items:flex-start;margin-top:12px;}
   #previewImg{width:96px;height:96px;object-fit:cover;border-radius:10px;border:1px solid var(--line);flex:none;background:var(--surface-2);}
   .ocr-status{flex:1;font-size:.86rem;color:var(--ink-soft);}
@@ -146,6 +153,18 @@
     </div>
   </section>
 
+  <section class="card" id="cropCard" hidden>
+    <h2>Recorta el documento</h2>
+    <p class="crop-hint">Ajusta el recuadro para que quede <b>solo el documento, bien pegado a los bordes</b> — sin mesa ni fondo alrededor. Esto es lo que más mejora la lectura automática.</p>
+    <div class="crop-canvas-wrap">
+      <canvas id="cropCanvas"></canvas>
+    </div>
+    <div class="crop-actions">
+      <button class="btn btn-ghost" id="cropCancelBtn">Cancelar</button>
+      <button class="btn btn-primary" id="cropConfirmBtn">Usar este recorte</button>
+    </div>
+  </section>
+
   <section class="card" id="formCard" hidden>
     <h2>2. Revisa y corrige</h2>
     <p class="card-lede">Los datos con <span class="guess-tag">sugerido</span> vienen del lector automático — verifícalos antes de agregar.</p>
@@ -207,7 +226,7 @@
 
   <footer>
     Los datos se procesan en este mismo celular — no se envían a ningún servidor. Prototipo interno, Regional Nariño-Putumayo.<br>
-    <span class="mono" id="buildTag" style="font-size:.7rem;">build 2026-09-23b</span>
+    <span class="mono" id="buildTag" style="font-size:.7rem;">build 2026-09-23c</span>
     · <a href="#" id="resetCacheLink">Limpiar caché de la app</a>
   </footer>
 </main>
@@ -227,6 +246,10 @@
   try { people = JSON.parse(localStorage.getItem(STORE_KEY)) || []; } catch(e) { people = []; }
 
   var fileInput = document.getElementById('fileInput');
+  var cropCard = document.getElementById('cropCard');
+  var cropCanvas = document.getElementById('cropCanvas');
+  var cropCancelBtn = document.getElementById('cropCancelBtn');
+  var cropConfirmBtn = document.getElementById('cropConfirmBtn');
   var previewWrap = document.getElementById('previewWrap');
   var previewImg = document.getElementById('previewImg');
   var ocrStatus = document.getElementById('ocrStatus');
@@ -387,6 +410,151 @@
     fields.tipo.value = 'DNI';
   }
 
+  // ---- recorte + preprocesamiento (clave para que el OCR funcione bien) ----
+  var cropImgEl = null;
+  var cropRect = {x:0,y:0,w:0,h:0};
+  var cropDrag = null;
+
+  function openCropUI(file){
+    var img = new Image();
+    img.onload = function(){
+      cropImgEl = img;
+      var workingW = Math.min(img.naturalWidth, 1000);
+      var scale = workingW / img.naturalWidth;
+      var workingH = Math.round(img.naturalHeight * scale);
+      cropCanvas.width = workingW;
+      cropCanvas.height = workingH;
+      cropRect = { x: workingW*0.06, y: workingH*0.06, w: workingW*0.88, h: workingH*0.88 };
+      drawCrop();
+      cropCard.hidden = false;
+      formCard.hidden = true;
+      previewWrap.hidden = true;
+      cropCard.scrollIntoView({behavior:'smooth', block:'start'});
+    };
+    img.onerror = function(){ processCapturedFile(file); };
+    img.src = URL.createObjectURL(file);
+  }
+
+  function drawCrop(){
+    var ctx = cropCanvas.getContext('2d');
+    ctx.clearRect(0,0,cropCanvas.width,cropCanvas.height);
+    ctx.drawImage(cropImgEl, 0,0, cropCanvas.width, cropCanvas.height);
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(0,0,cropCanvas.width, cropRect.y);
+    ctx.fillRect(0,cropRect.y+cropRect.h,cropCanvas.width, cropCanvas.height-(cropRect.y+cropRect.h));
+    ctx.fillRect(0,cropRect.y,cropRect.x,cropRect.h);
+    ctx.fillRect(cropRect.x+cropRect.w,cropRect.y,cropCanvas.width-(cropRect.x+cropRect.w),cropRect.h);
+    ctx.strokeStyle = '#C08829'; ctx.lineWidth = 3;
+    ctx.strokeRect(cropRect.x, cropRect.y, cropRect.w, cropRect.h);
+    var pts = [[cropRect.x,cropRect.y],[cropRect.x+cropRect.w,cropRect.y],[cropRect.x,cropRect.y+cropRect.h],[cropRect.x+cropRect.w,cropRect.y+cropRect.h]];
+    ctx.fillStyle = '#C08829';
+    pts.forEach(function(p){
+      ctx.beginPath(); ctx.arc(p[0],p[1], Math.max(10, cropCanvas.width*0.018), 0, Math.PI*2); ctx.fill();
+    });
+  }
+
+  function canvasPoint(evt){
+    var rect = cropCanvas.getBoundingClientRect();
+    var scaleX = cropCanvas.width/rect.width, scaleY = cropCanvas.height/rect.height;
+    return { x:(evt.clientX-rect.left)*scaleX, y:(evt.clientY-rect.top)*scaleY };
+  }
+
+  function hitCorner(x,y){
+    var r = Math.max(18, cropCanvas.width*0.035);
+    var corners = {
+      tl:[cropRect.x, cropRect.y], tr:[cropRect.x+cropRect.w, cropRect.y],
+      bl:[cropRect.x, cropRect.y+cropRect.h], br:[cropRect.x+cropRect.w, cropRect.y+cropRect.h]
+    };
+    for (var k in corners){
+      var dx = x-corners[k][0], dy = y-corners[k][1];
+      if (Math.sqrt(dx*dx+dy*dy) <= r) return k;
+    }
+    return null;
+  }
+
+  cropCanvas.addEventListener('pointerdown', function(evt){
+    var p = canvasPoint(evt);
+    var corner = hitCorner(p.x,p.y);
+    if (corner) cropDrag = { mode:'corner', corner: corner };
+    else if (p.x>cropRect.x && p.x<cropRect.x+cropRect.w && p.y>cropRect.y && p.y<cropRect.y+cropRect.h) cropDrag = { mode:'move', offX: p.x-cropRect.x, offY: p.y-cropRect.y };
+    else cropDrag = null;
+    if (cropDrag) { try { cropCanvas.setPointerCapture(evt.pointerId); } catch(e){} }
+  });
+
+  cropCanvas.addEventListener('pointermove', function(evt){
+    if (!cropDrag) return;
+    evt.preventDefault();
+    var p = canvasPoint(evt);
+    p.x = Math.max(0, Math.min(cropCanvas.width, p.x));
+    p.y = Math.max(0, Math.min(cropCanvas.height, p.y));
+    var MIN = 30;
+    if (cropDrag.mode === 'move') {
+      var nx = p.x - cropDrag.offX, ny = p.y - cropDrag.offY;
+      nx = Math.max(0, Math.min(cropCanvas.width-cropRect.w, nx));
+      ny = Math.max(0, Math.min(cropCanvas.height-cropRect.h, ny));
+      cropRect.x = nx; cropRect.y = ny;
+    } else if (cropDrag.mode === 'corner') {
+      var c = cropDrag.corner, nw, nh;
+      if (c==='tl'){ nw=cropRect.x+cropRect.w-p.x; nh=cropRect.y+cropRect.h-p.y; if(nw>MIN){cropRect.x=p.x;cropRect.w=nw;} if(nh>MIN){cropRect.y=p.y;cropRect.h=nh;} }
+      else if (c==='tr'){ nw=p.x-cropRect.x; nh=cropRect.y+cropRect.h-p.y; if(nw>MIN)cropRect.w=nw; if(nh>MIN){cropRect.y=p.y;cropRect.h=nh;} }
+      else if (c==='bl'){ nw=cropRect.x+cropRect.w-p.x; nh=p.y-cropRect.y; if(nw>MIN){cropRect.x=p.x;cropRect.w=nw;} if(nh>MIN)cropRect.h=nh; }
+      else if (c==='br'){ nw=p.x-cropRect.x; nh=p.y-cropRect.y; if(nw>MIN)cropRect.w=nw; if(nh>MIN)cropRect.h=nh; }
+    }
+    drawCrop();
+  });
+
+  cropCanvas.addEventListener('pointerup', function(){ cropDrag=null; });
+  cropCanvas.addEventListener('pointercancel', function(){ cropDrag=null; });
+
+  // escala de grises + estiramiento de contraste - mejora mucho la lectura de texto embutido en plastico
+  function preprocessCanvas(canvas){
+    var ctx = canvas.getContext('2d');
+    var w = canvas.width, h = canvas.height;
+    var imgData = ctx.getImageData(0,0,w,h);
+    var d = imgData.data;
+    var min=255, max=0, i, p;
+    var gray = new Float32Array(w*h);
+    for (i=0, p=0; i<d.length; i+=4, p++){
+      var g = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
+      gray[p]=g;
+      if (g<min) min=g;
+      if (g>max) max=g;
+    }
+    var range = Math.max(1, max-min);
+    for (i=0, p=0; i<d.length; i+=4, p++){
+      var v = (gray[p]-min) * 255/range;
+      v = (v-128)*1.3 + 128;
+      v = Math.max(0, Math.min(255, v));
+      d[i]=d[i+1]=d[i+2]=v;
+    }
+    ctx.putImageData(imgData,0,0);
+  }
+
+  cropConfirmBtn.addEventListener('click', function(){
+    var sx = cropRect.x / cropCanvas.width * cropImgEl.naturalWidth;
+    var sy = cropRect.y / cropCanvas.height * cropImgEl.naturalHeight;
+    var sw = cropRect.w / cropCanvas.width * cropImgEl.naturalWidth;
+    var sh = cropRect.h / cropCanvas.height * cropImgEl.naturalHeight;
+
+    var out = document.createElement('canvas');
+    var targetW = Math.min(1800, Math.max(sw, 900));
+    var outScale = targetW / sw;
+    out.width = Math.round(sw*outScale);
+    out.height = Math.round(sh*outScale);
+    var octx = out.getContext('2d');
+    octx.drawImage(cropImgEl, sx,sy,sw,sh, 0,0, out.width, out.height);
+    preprocessCanvas(out);
+
+    out.toBlob(function(blob){
+      cropCard.hidden = true;
+      processCapturedFile(new File([blob], 'recorte.png', {type:'image/png'}));
+    }, 'image/png');
+  });
+
+  cropCancelBtn.addEventListener('click', function(){
+    cropCard.hidden = true;
+  });
+
   // ---- captura + OCR ----
   var worker = null;
   var currentOcrText = '';   // texto acumulado de todas las fotos de la persona actual (lado 1 + lado 2...)
@@ -403,6 +571,7 @@
           }
         }
       });
+      await worker.setParameters({ tessedit_pageseg_mode: '6' }); // bloque uniforme de texto - mejor para tarjetas de identidad que el modo "pagina completa" por defecto
     }
     return worker;
   }
@@ -463,7 +632,7 @@
     var file = fileInput.files[0];
     fileInput.value = '';
     if (!file) return;
-    processCapturedFile(file);
+    openCropUI(file);
   });
 
   addSideBtn.addEventListener('click', function(){
