@@ -74,6 +74,7 @@
   .field input:focus, .field select:focus{outline:2px solid var(--primary); outline-offset:1px; border-color:var(--primary);}
   .field-row{display:grid; grid-template-columns:1fr 1fr; gap:10px;}
   .guess-tag{display:inline-block;font-size:.68rem;font-weight:700;color:var(--accent-ink);background:var(--accent-soft);padding:1px 7px;border-radius:99px;margin-left:6px;letter-spacing:.02em;}
+  .sides-badge{font-size:.8rem;font-weight:600;color:var(--primary);background:var(--primary-soft);border-radius:8px;padding:7px 10px;margin:2px 0 10px;}
 
   details.raw-ocr{margin-top:10px;font-size:.82rem;color:var(--ink-soft);}
   details.raw-ocr summary{cursor:pointer;font-weight:600;color:var(--primary);}
@@ -170,6 +171,10 @@
     </div>
     <div class="field"><label for="f_pais">País de nacionalidad</label><input id="f_pais" autocomplete="off"></div>
 
+    <p class="sides-badge" id="sidesBadge" hidden></p>
+
+    <button class="btn btn-ghost" id="addSideBtn" style="margin-top:4px;">📷 Escanear el otro lado del documento</button>
+
     <details class="raw-ocr" id="rawOcrDetails" hidden>
       <summary>Ver texto crudo leído del documento</summary>
       <pre id="rawOcrText"></pre>
@@ -227,6 +232,8 @@
   var rawOcrText = document.getElementById('rawOcrText');
   var addRowBtn = document.getElementById('addRowBtn');
   var cancelRowBtn = document.getElementById('cancelRowBtn');
+  var addSideBtn = document.getElementById('addSideBtn');
+  var sidesBadge = document.getElementById('sidesBadge');
   var tableBody = document.getElementById('tableBody');
   var emptyRow = document.getElementById('emptyRow');
   var countPill = document.getElementById('countPill');
@@ -280,6 +287,21 @@
   // ---- OCR heuristics ----
   var COUNTRY_LIST = ['VENEZUELA','ECUADOR','PERU','PERÚ','COLOMBIA','BOLIVIA','CHILE','ARGENTINA','BRASIL','CUBA','HAITI','HAITÍ','PANAMA','PANAMÁ','MEXICO','MÉXICO','REPUBLICA DOMINICANA','ESTADOS UNIDOS'];
 
+  // Busca una etiqueta (ej. "APELLIDOS") en el texto y devuelve lo que sigue hasta
+  // la siguiente etiqueta conocida, un numero largo, o un doble salto de linea.
+  // Tolerante a ":" "-" y otros caracteres que el OCR suele meter entre la etiqueta y el dato.
+  function findLabelValue(text, labelRegex, stopRegex, maxLen){
+    var m = labelRegex.exec(text);
+    if (!m) return '';
+    var start = m.index + m[0].length;
+    var slice = text.slice(start, start + (maxLen || 60));
+    var stop = stopRegex.exec(slice);
+    var raw = stop ? slice.slice(0, stop.index) : slice;
+    raw = raw.replace(/[^A-ZÑÁÉÍÓÚ \n]/g, ' ');
+    var lines = raw.split('\n').map(function(l){ return l.trim(); }).filter(Boolean);
+    return lines.join(' ').replace(/\s+/g,' ').trim();
+  }
+
   function guessFromText(text){
     var upper = text.toUpperCase();
     var guess = { ap1:'', ap2:'', nombres:'', num:'', fecha:'', sexo:'', pais:'' };
@@ -311,16 +333,18 @@
       if (upper.indexOf(COUNTRY_LIST[i]) !== -1) { guess.pais = COUNTRY_LIST[i].replace('PERÚ','Perú').replace('MÉXICO','México').replace('PANAMÁ','Panamá').replace('HAITÍ','Haití'); if(guess.pais===COUNTRY_LIST[i]) guess.pais = toTitleCase(COUNTRY_LIST[i]); break; }
     }
 
-    // apellidos / nombres a partir de etiquetas tipo cedula venezolana
-    var apMatch = upper.match(/APELLIDOS?\s*\n?\s*([A-ZÑÁÉÍÓÚ\s]{3,40}?)(?:\n|NOMBRES?)/);
-    if (apMatch) {
-      var apParts = apMatch[1].trim().split(/\s+/);
+    // apellidos / nombres: busca la etiqueta y toma lo que sigue hasta la
+    // siguiente etiqueta conocida (mucho mas tolerante al ruido del OCR que un regex rigido)
+    var stopWords = /APELLID\w*|NOMBRE\w*|FECHA\w*|NACIMIENTO|NACIONAL\w*|SEXO|LUGAR|ESTADO\s?CIVIL|EXPEDIC\w*|VENCIM\w*|REPUBLICA|IDENTIDAD|\d{2}[\/\-.]\d{2}|\n\s*\n/;
+    var apRaw = findLabelValue(upper, /APELLID\w*/, stopWords, 60);
+    var noRaw = findLabelValue(upper, /NOMBRE\w*/, stopWords, 60);
+    if (apRaw) {
+      var apParts = apRaw.split(/\s+/).filter(Boolean);
       guess.ap1 = toTitleCase(apParts[0] || '');
       guess.ap2 = toTitleCase(apParts.slice(1).join(' ') || '');
     }
-    var noMatch = upper.match(/NOMBRES?\s*\n?\s*([A-ZÑÁÉÍÓÚ\s]{3,40}?)(?:\n|$|\d)/);
-    if (noMatch) {
-      guess.nombres = toTitleCase(noMatch[1].trim());
+    if (noRaw) {
+      guess.nombres = toTitleCase(noRaw);
     }
 
     return guess;
@@ -341,6 +365,18 @@
     fields.tipo.value = 'DNI';
   }
 
+  // llena solo los campos que el usuario aun no ha tocado/llenado -
+  // asi el segundo lado no borra correcciones ya hechas sobre el primero
+  function fillFormEmptyOnly(guess){
+    if (!fields.ap1.value && guess.ap1) fields.ap1.value = guess.ap1;
+    if (!fields.ap2.value && guess.ap2) fields.ap2.value = guess.ap2;
+    if (!fields.nombres.value && guess.nombres) fields.nombres.value = guess.nombres;
+    if (!fields.num.value && guess.num) fields.num.value = (guess.num || '').replace(/[.\-]/g,'');
+    if (!fields.fecha.value && guess.fecha) fields.fecha.value = guess.fecha;
+    if (guess.sexo) fields.sexo.value = guess.sexo;
+    if (!fields.pais.value && guess.pais) fields.pais.value = guess.pais;
+  }
+
   function clearForm(){
     Object.keys(fields).forEach(function(k){ if (fields[k].tagName==='INPUT') fields[k].value=''; });
     fields.sexo.value = 'M';
@@ -349,6 +385,9 @@
 
   // ---- captura + OCR ----
   var worker = null;
+  var currentOcrText = '';   // texto acumulado de todas las fotos de la persona actual (lado 1 + lado 2...)
+  var sideCount = 0;
+
   async function getWorker(){
     if (!worker) {
       ocrStatus.textContent = 'Descargando lector de texto (solo la primera vez)…';
@@ -364,40 +403,61 @@
     return worker;
   }
 
-  fileInput.addEventListener('change', async function(){
-    var file = fileInput.files[0];
-    if (!file) return;
+  function updateSidesBadge(){
+    if (sideCount <= 1) { sidesBadge.hidden = true; return; }
+    sidesBadge.hidden = false;
+    sidesBadge.textContent = '✓ ' + sideCount + ' fotos analizadas (ambos lados combinados)';
+  }
+
+  async function processCapturedFile(file){
+    var isFirstSide = formCard.hidden; // si el formulario aun no se ha mostrado, es la primera foto de esta persona
     var url = URL.createObjectURL(file);
     previewImg.src = url;
     previewWrap.hidden = false;
-    formCard.hidden = true;
     ocrStatus.className = 'ocr-status';
     ocrStatus.textContent = 'Preparando lector…';
     ocrBar.style.width = '0%';
+    addSideBtn.disabled = true;
 
     try {
       var w = await getWorker();
       var result = await w.recognize(file);
       var text = result.data.text || '';
+      sideCount += 1;
+      currentOcrText = isFirstSide ? text : (currentOcrText + '\n\n--- OTRO LADO ---\n\n' + text);
+
       ocrStatus.className = 'ocr-status done';
       ocrStatus.textContent = '✓ Lectura lista — revisa los campos abajo.';
 
-      var guess = guessFromText(text);
-      clearForm();
-      fillForm(guess);
-      rawOcrText.textContent = text.trim() || '(no se detectó texto)';
+      var guess = guessFromText(currentOcrText);
+      if (isFirstSide) { clearForm(); fillForm(guess); }
+      else { fillFormEmptyOnly(guess); }
+
+      rawOcrText.textContent = currentOcrText.trim() || '(no se detectó texto)';
       rawOcrDetails.hidden = false;
+      updateSidesBadge();
       formCard.hidden = false;
       formCard.scrollIntoView({behavior:'smooth', block:'start'});
     } catch(err){
       ocrStatus.className = 'ocr-status err';
       ocrStatus.textContent = 'No se pudo leer automáticamente. Llena los datos a mano.';
-      clearForm();
-      rawOcrDetails.hidden = true;
+      if (isFirstSide) clearForm();
+      rawOcrDetails.hidden = !currentOcrText;
       formCard.hidden = false;
       formCard.scrollIntoView({behavior:'smooth', block:'start'});
     }
+    addSideBtn.disabled = false;
+  }
+
+  fileInput.addEventListener('change', function(){
+    var file = fileInput.files[0];
     fileInput.value = '';
+    if (!file) return;
+    processCapturedFile(file);
+  });
+
+  addSideBtn.addEventListener('click', function(){
+    fileInput.click();
   });
 
   addRowBtn.addEventListener('click', function(){
@@ -420,12 +480,14 @@
     renderTable();
     formCard.hidden = true;
     previewWrap.hidden = true;
+    currentOcrText = ''; sideCount = 0; sidesBadge.hidden = true;
     tableBody.parentElement.parentElement.scrollIntoView({behavior:'smooth', block:'center'});
   });
 
   cancelRowBtn.addEventListener('click', function(){
     formCard.hidden = true;
     previewWrap.hidden = true;
+    currentOcrText = ''; sideCount = 0; sidesBadge.hidden = true;
   });
 
   clearAllBtn.addEventListener('click', function(){
