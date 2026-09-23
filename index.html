@@ -236,7 +236,7 @@
 
   <footer>
     Los datos se procesan en este mismo celular — no se envían a ningún servidor. Prototipo interno, Regional Nariño-Putumayo.<br>
-    <span class="mono" id="buildTag" style="font-size:.7rem;">build 2026-09-23h</span>
+    <span class="mono" id="buildTag" style="font-size:.7rem;">build 2026-09-24a</span>
     · <a href="#" id="resetCacheLink">Limpiar caché de la app</a>
   </footer>
 </main>
@@ -407,10 +407,14 @@
   }
 
   function guessFromText(text){
-    var upper = text.toUpperCase();
+    // el modo de lectura "texto disperso" (PSM 11) separa cada fragmento con una
+    // LINEA EN BLANCO entre la etiqueta y el valor (ej. "Nombres\n\nNICOLAS DAVIAN") -
+    // si no se colapsan, la busqueda por etiqueta corta justo ahi y nunca llega al valor real.
+    var upper = text.replace(/\n{2,}/g, '\n').toUpperCase();
     var guess = { ap1:'', ap2:'', nombres:'', num:'', fecha:'', sexo:'', pais:'', tipo:'' };
 
     // 1) intenta primero la franja MRZ (si es un pasaporte) - es igual en cualquier idioma/pais
+    // (usa el texto ORIGINAL sin colapsar, porque la MRZ si depende de que cada linea sea distinta)
     var mrz = tryParseMRZ(text);
     if (mrz) guess = Object.assign(guess, mrz);
 
@@ -454,9 +458,10 @@
 
     // apellidos / nombres: busca la etiqueta (español o ingles) y toma lo que sigue hasta
     // la siguiente etiqueta conocida (mucho mas tolerante al ruido del OCR que un regex rigido)
-    var stopWords = /APELLID\w*|SURNAME|LAST\s?NAME|NOMBRE\w*|GIVEN\s?NAMES?|FIRST\s?NAME|FECHA\w*|DATE OF BIRTH|NACIMIENTO|BIRTH|NACIONAL\w*|NATIONALITY|SEX(O)?\b|LUGAR|PLACE OF|ESTADO\s?CIVIL|EXPEDIC\w*|VENCIM\w*|EXPIRY|REPUBLICA|IDENTIDAD|\d{2}[\/\-.]\d{2}|\n\s*\n/;
+    var stopWords = /APEL\w*|SURNAME|LAST\s?NAME|NOMBRE\w*|GIVEN\s?NAMES?|FIRST\s?NAME|FECHA\w*|DATE OF BIRTH|NACIMIENTO|BIRTH|NACIONAL\w*|NATIONALITY|SEX(O)?\b|LUGAR|PLACE OF|ESTADO\s?CIVIL|EXPEDIC\w*|VENCIM\w*|EXPIRY|REPUBLICA|IDENTIDAD|\d{2}[\/\-.]\d{2}/;
     if (!guess.ap1) {
-      var apRaw = findLabelValue(upper, /APELLID\w*|SURNAME|LAST\s?NAME/, stopWords, 60);
+      // "APEL" en vez de "APELLID" completo - el OCR a veces lee mal "Apellidos" (ej. "Apelisdos")
+      var apRaw = findLabelValue(upper, /APEL\w*|SURNAME|LAST\s?NAME/, stopWords, 60);
       if (apRaw) {
         var apParts = apRaw.split(/\s+/).filter(Boolean);
         guess.ap1 = toTitleCase(apParts[0] || '');
