@@ -347,9 +347,60 @@
     return '';
   }
 
+  // Codigos ISO-3 de pais mas frecuentes en este contexto migratorio, para traducir
+  // el codigo de nacionalidad que trae la franja MRZ de los pasaportes.
+  var ISO3_TO_NAME = {
+    VEN:'Venezuela', COL:'Colombia', ECU:'Ecuador', PER:'Perú', BOL:'Bolivia',
+    CHL:'Chile', ARG:'Argentina', BRA:'Brasil', CUB:'Cuba', HTI:'Haití',
+    PAN:'Panamá', MEX:'México', DOM:'República Dominicana', USA:'Estados Unidos',
+    ESP:'España', CHN:'China', IND:'India'
+  };
+
+  // ---- Zona de Lectura Mecanica (MRZ) de pasaportes - formato IGUAL en todos los
+  // paises e idiomas (estandar ICAO), asi que es mucho mas confiable que buscar
+  // "Apellido" o "Last Name" en el texto impreso normal.
+  function parseYYMMDD(s){
+    if (!/^\d{6}$/.test(s)) return '';
+    var yy = parseInt(s.slice(0,2),10);
+    var century = yy > 30 ? '19' : '20'; // heuristica: asume que documentos de mayores de ~30 nacieron en 19xx
+    return s.slice(4,6) + '/' + s.slice(2,4) + '/' + century + s.slice(0,2);
+  }
+
+  function tryParseMRZ(rawText){
+    var lines = rawText.split('\n').map(function(l){ return l.toUpperCase().replace(/\s+/g,''); });
+    for (var i=0;i<lines.length-1;i++){
+      var l1 = lines[i], l2 = lines[i+1];
+      if (l1.length>=28 && l2.length>=28 && /^P[A-Z<]/.test(l1) && /^[A-Z0-9<]+$/.test(l1) && /^[A-Z0-9<]+$/.test(l2)) {
+        try {
+          var namesPart = l1.slice(5);
+          var nameSplit = namesPart.split('<<');
+          var surnameParts = (nameSplit[0]||'').replace(/</g,' ').trim().split(/\s+/).filter(Boolean);
+          var given = (nameSplit[1]||'').replace(/</g,' ').trim();
+          var nationality = l2.slice(10,13).replace(/</g,'');
+          var sex = l2.slice(20,21);
+          var g = {
+            ap1: toTitleCase(surnameParts[0]||''),
+            ap2: toTitleCase(surnameParts.slice(1).join(' ')||''),
+            nombres: toTitleCase(given),
+            fecha: parseYYMMDD(l2.slice(13,19)),
+            sexo: (sex==='F'||sex==='M') ? sex : '',
+            pais: ISO3_TO_NAME[nationality] || nationality,
+            tipo: 'Pasaporte'
+          };
+          if (g.ap1 || g.nombres) return g; // si no logro sacar nada util, seguir buscando/descartar
+        } catch(e){}
+      }
+    }
+    return null;
+  }
+
   function guessFromText(text){
     var upper = text.toUpperCase();
-    var guess = { ap1:'', ap2:'', nombres:'', num:'', fecha:'', sexo:'', pais:'' };
+    var guess = { ap1:'', ap2:'', nombres:'', num:'', fecha:'', sexo:'', pais:'', tipo:'' };
+
+    // 1) intenta primero la franja MRZ (si es un pasaporte) - es igual en cualquier idioma/pais
+    var mrz = tryParseMRZ(text);
+    if (mrz) guess = Object.assign(guess, mrz);
 
     // documento: grupo de digitos mas largo (6 a 12 digitos, ignorando fechas)
     var digitGroups = upper.match(/\d[\d.\-]{4,12}\d/g) || [];
@@ -362,9 +413,11 @@
     });
     guess.num = bestNum;
 
-    // fecha de nacimiento: anclada a la etiqueta "NACIMIENTO" para no confundirla con
-    // la fecha de expedicion, que tiene el mismo formato mas abajo en el documento
-    guess.fecha = findDateNear(upper, /NACIMIENTO/, 90);
+    // fecha de nacimiento: anclada a la etiqueta (español o ingles) para no confundirla
+    // con la fecha de expedicion/vencimiento, que tienen el mismo formato
+    if (!guess.fecha) {
+      guess.fecha = findDateNear(upper, /NACIMIENTO|DATE OF BIRTH|BIRTH DATE|\bDOB\b/, 90);
+    }
     if (!guess.fecha) {
       // respaldo: si no encontro la etiqueta, toma la primera fecha que aparezca en el texto
       var anyDate = upper.match(/(\d{1,2})\s+(ENE|FEB|MAR|ABR|MAY|JUN|JUL|AGO|SEP|OCT|NOV|DIC)\w*\s+(\d{4})/) || upper.match(/(\d{2})[\/\-.](\d{2})[\/\-.](\d{2,4})/);
@@ -374,27 +427,33 @@
       }
     }
 
-    // sexo
-    if (/\bF\b|FEMENINO/.test(upper)) guess.sexo = 'F';
-    else if (/\bM\b|MASCULINO/.test(upper)) guess.sexo = 'M';
+    // sexo (español/ingles)
+    if (!guess.sexo) {
+      if (/\bF\b|FEMENINO|\bFEMALE\b/.test(upper)) guess.sexo = 'F';
+      else if (/\bM\b|MASCULINO|\bMALE\b/.test(upper)) guess.sexo = 'M';
+    }
 
     // pais
-    for (var i=0;i<COUNTRY_LIST.length;i++){
-      if (upper.indexOf(COUNTRY_LIST[i]) !== -1) { guess.pais = COUNTRY_LIST[i].replace('PERÚ','Perú').replace('MÉXICO','México').replace('PANAMÁ','Panamá').replace('HAITÍ','Haití'); if(guess.pais===COUNTRY_LIST[i]) guess.pais = toTitleCase(COUNTRY_LIST[i]); break; }
+    if (!guess.pais) {
+      for (var i=0;i<COUNTRY_LIST.length;i++){
+        if (upper.indexOf(COUNTRY_LIST[i]) !== -1) { guess.pais = COUNTRY_LIST[i].replace('PERÚ','Perú').replace('MÉXICO','México').replace('PANAMÁ','Panamá').replace('HAITÍ','Haití'); if(guess.pais===COUNTRY_LIST[i]) guess.pais = toTitleCase(COUNTRY_LIST[i]); break; }
+      }
     }
 
-    // apellidos / nombres: busca la etiqueta y toma lo que sigue hasta la
-    // siguiente etiqueta conocida (mucho mas tolerante al ruido del OCR que un regex rigido)
-    var stopWords = /APELLID\w*|NOMBRE\w*|FECHA\w*|NACIMIENTO|NACIONAL\w*|SEXO|LUGAR|ESTADO\s?CIVIL|EXPEDIC\w*|VENCIM\w*|REPUBLICA|IDENTIDAD|\d{2}[\/\-.]\d{2}|\n\s*\n/;
-    var apRaw = findLabelValue(upper, /APELLID\w*/, stopWords, 60);
-    var noRaw = findLabelValue(upper, /NOMBRE\w*/, stopWords, 60);
-    if (apRaw) {
-      var apParts = apRaw.split(/\s+/).filter(Boolean);
-      guess.ap1 = toTitleCase(apParts[0] || '');
-      guess.ap2 = toTitleCase(apParts.slice(1).join(' ') || '');
+    // apellidos / nombres: busca la etiqueta (español o ingles) y toma lo que sigue hasta
+    // la siguiente etiqueta conocida (mucho mas tolerante al ruido del OCR que un regex rigido)
+    var stopWords = /APELLID\w*|SURNAME|LAST\s?NAME|NOMBRE\w*|GIVEN\s?NAMES?|FIRST\s?NAME|FECHA\w*|DATE OF BIRTH|NACIMIENTO|BIRTH|NACIONAL\w*|NATIONALITY|SEX(O)?\b|LUGAR|PLACE OF|ESTADO\s?CIVIL|EXPEDIC\w*|VENCIM\w*|EXPIRY|REPUBLICA|IDENTIDAD|\d{2}[\/\-.]\d{2}|\n\s*\n/;
+    if (!guess.ap1) {
+      var apRaw = findLabelValue(upper, /APELLID\w*|SURNAME|LAST\s?NAME/, stopWords, 60);
+      if (apRaw) {
+        var apParts = apRaw.split(/\s+/).filter(Boolean);
+        guess.ap1 = toTitleCase(apParts[0] || '');
+        guess.ap2 = toTitleCase(apParts.slice(1).join(' ') || '');
+      }
     }
-    if (noRaw) {
-      guess.nombres = toTitleCase(noRaw);
+    if (!guess.nombres) {
+      var noRaw = findLabelValue(upper, /NOMBRE\w*|GIVEN\s?NAMES?|FIRST\s?NAME/, stopWords, 60);
+      if (noRaw) guess.nombres = toTitleCase(noRaw);
     }
 
     return guess;
@@ -412,7 +471,7 @@
     fields.fecha.value = guess.fecha || '';
     fields.sexo.value = guess.sexo === 'F' ? 'F' : 'M';
     fields.pais.value = guess.pais || '';
-    fields.tipo.value = 'DNI';
+    fields.tipo.value = guess.tipo || 'DNI';
   }
 
   // llena solo los campos que el usuario aun no ha tocado/llenado -
@@ -425,6 +484,7 @@
     if (!fields.fecha.value && guess.fecha) fields.fecha.value = guess.fecha;
     if (guess.sexo) fields.sexo.value = guess.sexo;
     if (!fields.pais.value && guess.pais) fields.pais.value = guess.pais;
+    if (guess.tipo && fields.tipo.value === 'DNI') fields.tipo.value = guess.tipo;
   }
 
   function clearForm(){
