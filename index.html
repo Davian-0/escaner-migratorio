@@ -205,7 +205,11 @@
     </div>
   </section>
 
-  <footer>Los datos se procesan en este mismo celular — no se envían a ningún servidor. Prototipo interno, Regional Nariño-Putumayo.</footer>
+  <footer>
+    Los datos se procesan en este mismo celular — no se envían a ningún servidor. Prototipo interno, Regional Nariño-Putumayo.<br>
+    <span class="mono" id="buildTag" style="font-size:.7rem;">build 2026-09-23b</span>
+    · <a href="#" id="resetCacheLink">Limpiar caché de la app</a>
+  </footer>
 </main>
 
 <div class="stickybar">
@@ -426,23 +430,29 @@
       sideCount += 1;
       currentOcrText = isFirstSide ? text : (currentOcrText + '\n\n--- OTRO LADO ---\n\n' + text);
 
-      ocrStatus.className = 'ocr-status done';
-      ocrStatus.textContent = '✓ Lectura lista — revisa los campos abajo.';
-
       var guess = guessFromText(currentOcrText);
       if (isFirstSide) { clearForm(); fillForm(guess); }
       else { fillFormEmptyOnly(guess); }
 
-      rawOcrText.textContent = currentOcrText.trim() || '(no se detectó texto)';
+      if (text.trim().length < 5) {
+        ocrStatus.className = 'ocr-status err';
+        ocrStatus.textContent = '⚠ El lector no encontró texto legible en la foto (revisa enfoque/luz). Llena los datos a mano.';
+      } else {
+        ocrStatus.className = 'ocr-status done';
+        ocrStatus.textContent = '✓ Lectura lista — revisa los campos abajo.';
+      }
+
+      rawOcrText.textContent = currentOcrText.trim() || '(no se detectó ningún texto en la imagen)';
       rawOcrDetails.hidden = false;
       updateSidesBadge();
       formCard.hidden = false;
       formCard.scrollIntoView({behavior:'smooth', block:'start'});
     } catch(err){
       ocrStatus.className = 'ocr-status err';
-      ocrStatus.textContent = 'No se pudo leer automáticamente. Llena los datos a mano.';
+      ocrStatus.textContent = '⚠ Error real: ' + (err && err.message ? err.message : String(err));
       if (isFirstSide) clearForm();
-      rawOcrDetails.hidden = !currentOcrText;
+      rawOcrText.textContent = currentOcrText.trim() || '(sin texto — el lector fallo antes de terminar)';
+      rawOcrDetails.hidden = false;
       formCard.hidden = false;
       formCard.scrollIntoView({behavior:'smooth', block:'start'});
     }
@@ -590,6 +600,24 @@
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch(function(){});
+  }
+
+  var resetCacheLink = document.getElementById('resetCacheLink');
+  if (resetCacheLink) {
+    resetCacheLink.addEventListener('click', async function(e){
+      e.preventDefault();
+      try {
+        if ('serviceWorker' in navigator) {
+          var regs = await navigator.serviceWorker.getRegistrations();
+          for (var i=0;i<regs.length;i++) await regs[i].unregister();
+        }
+        if (window.caches) {
+          var keys = await caches.keys();
+          for (var j=0;j<keys.length;j++) await caches.delete(keys[j]);
+        }
+      } catch(e2){}
+      location.reload(true);
+    });
   }
 })();
 </script>
