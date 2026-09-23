@@ -226,7 +226,7 @@
 
   <footer>
     Los datos se procesan en este mismo celular — no se envían a ningún servidor. Prototipo interno, Regional Nariño-Putumayo.<br>
-    <span class="mono" id="buildTag" style="font-size:.7rem;">build 2026-09-23c</span>
+    <span class="mono" id="buildTag" style="font-size:.7rem;">build 2026-09-23d</span>
     · <a href="#" id="resetCacheLink">Limpiar caché de la app</a>
   </footer>
 </main>
@@ -506,14 +506,35 @@
   cropCanvas.addEventListener('pointerup', function(){ cropDrag=null; });
   cropCanvas.addEventListener('pointercancel', function(){ cropDrag=null; });
 
-  // escala de grises + estiramiento de contraste - mejora mucho la lectura de texto embutido en plastico
+  // escala de grises + contraste + binarizacion (blanco/negro puro, umbral automatico de Otsu) -
+  // el contraste solo no basta para texto grabado en relieve sobre plastico laminado; convertir
+  // a blanco/negro puro es la tecnica estandar que mas ayuda en ese caso.
+  function otsuThreshold(hist, total){
+    var sum = 0;
+    for (var t=0;t<256;t++) sum += t*hist[t];
+    var sumB=0, wB=0, wF=0, varMax=0, threshold=127;
+    for (var t=0;t<256;t++){
+      wB += hist[t];
+      if (wB===0) continue;
+      wF = total-wB;
+      if (wF===0) break;
+      sumB += t*hist[t];
+      var mB = sumB/wB;
+      var mF = (sum-sumB)/wF;
+      var varBetween = wB*wF*(mB-mF)*(mB-mF);
+      if (varBetween > varMax){ varMax=varBetween; threshold=t; }
+    }
+    return threshold;
+  }
+
   function preprocessCanvas(canvas){
     var ctx = canvas.getContext('2d');
     var w = canvas.width, h = canvas.height;
     var imgData = ctx.getImageData(0,0,w,h);
     var d = imgData.data;
+    var n = w*h;
     var min=255, max=0, i, p;
-    var gray = new Float32Array(w*h);
+    var gray = new Float32Array(n);
     for (i=0, p=0; i<d.length; i+=4, p++){
       var g = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
       gray[p]=g;
@@ -521,11 +542,17 @@
       if (g>max) max=g;
     }
     var range = Math.max(1, max-min);
-    for (i=0, p=0; i<d.length; i+=4, p++){
+    var hist = new Array(256).fill(0);
+    for (p=0; p<n; p++){
       var v = (gray[p]-min) * 255/range;
-      v = (v-128)*1.3 + 128;
-      v = Math.max(0, Math.min(255, v));
-      d[i]=d[i+1]=d[i+2]=v;
+      v = Math.max(0, Math.min(255, Math.round(v)));
+      gray[p] = v;
+      hist[v]++;
+    }
+    var threshold = otsuThreshold(hist, n);
+    for (i=0, p=0; i<d.length; i+=4, p++){
+      var bw = gray[p] > threshold ? 255 : 0;
+      d[i]=d[i+1]=d[i+2]=bw;
     }
     ctx.putImageData(imgData,0,0);
   }
@@ -571,7 +598,7 @@
           }
         }
       });
-      await worker.setParameters({ tessedit_pageseg_mode: '6' }); // bloque uniforme de texto - mejor para tarjetas de identidad que el modo "pagina completa" por defecto
+      await worker.setParameters({ tessedit_pageseg_mode: '11' }); // texto disperso sin orden particular - mejor para campos sueltos de una cedula que "bloque uniforme" o "pagina completa"
     }
     return worker;
   }
