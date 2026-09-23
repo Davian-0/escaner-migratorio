@@ -1,0 +1,536 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Escáner Migratorio</title>
+<meta name="description" content="Escanea documentos de extranjeros y genera la tabla de un boletín informativo de Migración Colombia.">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#1B3A6B">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    color-scheme: light;
+    --bg:#F4F6F8; --surface:#FFFFFF; --surface-2:#EDF1F6;
+    --ink:#12213A; --ink-soft:#48587A; --ink-faint:#8493AD;
+    --primary:#1B3A6B; --primary-soft:#E4EBF5;
+    --accent:#C08829; --accent-soft:#F5E9D2; --accent-ink:#8C6316;
+    --line:#DCE2EA; --good:#2E7D4F; --good-soft:#E3F1E8; --bad:#B23A3A; --bad-soft:#FBE7E5;
+    --shadow: 0 1px 2px rgba(18,33,58,.06), 0 8px 24px -12px rgba(18,33,58,.18);
+    padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);}
+  body{
+    color:var(--ink); font-family:'Public Sans',system-ui,sans-serif; line-height:1.5;
+    padding-inline:16px; padding-block:0 100px;
+  }
+  h1,h2,h3{font-family:'Archivo',system-ui,sans-serif; text-wrap:balance; margin:0;}
+  .mono{font-family:'IBM Plex Mono',ui-monospace,monospace;}
+  a{color:var(--primary)}
+
+  header.top{max-width:640px;margin:0 auto;padding-block:20px 12px;}
+  .kicker{display:flex;align-items:center;gap:8px;font-size:.74rem;letter-spacing:.08em;text-transform:uppercase;color:var(--accent-ink);font-weight:700;margin-bottom:6px;}
+  .kicker .dot{width:6px;height:6px;border-radius:50%;background:var(--accent);}
+  h1.title{font-size:clamp(1.5rem,5vw,1.9rem);font-weight:800;color:var(--ink);margin:0 0 4px;}
+  .subtitle{color:var(--ink-soft);font-size:.92rem;max-width:56ch;margin:0;}
+
+  main{max-width:640px;margin:0 auto;}
+
+  section.card{
+    background:var(--surface); border:1px solid var(--line); border-radius:16px;
+    padding:18px; margin-top:14px; box-shadow:var(--shadow);
+  }
+  section.card h2{font-size:1.05rem;font-weight:700;margin-bottom:4px;}
+  .card-lede{color:var(--ink-soft);font-size:.86rem;margin:0 0 14px;}
+
+  /* --- capture --- */
+  .capture-zone{
+    border:2px dashed var(--line); border-radius:14px; padding:22px 16px;
+    text-align:center; background:var(--surface-2); cursor:pointer;
+  }
+  .capture-zone svg{width:40px;height:40px;color:var(--primary);margin-bottom:8px;}
+  .capture-zone .cta{font-weight:700;color:var(--primary);font-size:.98rem;}
+  .capture-zone .hint{color:var(--ink-faint);font-size:.8rem;margin-top:4px;}
+  #fileInput{display:none;}
+
+  .preview-wrap{display:flex;gap:12px;align-items:flex-start;margin-top:12px;}
+  #previewImg{width:96px;height:96px;object-fit:cover;border-radius:10px;border:1px solid var(--line);flex:none;background:var(--surface-2);}
+  .ocr-status{flex:1;font-size:.86rem;color:var(--ink-soft);}
+  .ocr-status .bar{height:6px;border-radius:99px;background:var(--surface-2);overflow:hidden;margin-top:6px;}
+  .ocr-status .bar-fill{height:100%;background:var(--primary);width:0%;transition:width .25s;}
+  .ocr-status.done{color:var(--good);font-weight:600;}
+  .ocr-status.err{color:var(--bad);font-weight:600;}
+
+  /* --- form --- */
+  .field{margin-bottom:12px;}
+  .field label{display:block;font-size:.78rem;font-weight:700;color:var(--ink-soft);margin-bottom:4px;text-transform:uppercase;letter-spacing:.03em;}
+  .field input, .field select{
+    width:100%; font:inherit; font-size:.98rem; padding:10px 12px; border-radius:10px;
+    border:1px solid var(--line); background:var(--surface); color:var(--ink);
+  }
+  .field input:focus, .field select:focus{outline:2px solid var(--primary); outline-offset:1px; border-color:var(--primary);}
+  .field-row{display:grid; grid-template-columns:1fr 1fr; gap:10px;}
+  .guess-tag{display:inline-block;font-size:.68rem;font-weight:700;color:var(--accent-ink);background:var(--accent-soft);padding:1px 7px;border-radius:99px;margin-left:6px;letter-spacing:.02em;}
+
+  details.raw-ocr{margin-top:10px;font-size:.82rem;color:var(--ink-soft);}
+  details.raw-ocr summary{cursor:pointer;font-weight:600;color:var(--primary);}
+  details.raw-ocr pre{white-space:pre-wrap;word-break:break-word;background:var(--surface-2);border-radius:8px;padding:10px;margin-top:8px;font-family:'IBM Plex Mono',monospace;font-size:.76rem;max-height:160px;overflow-y:auto;}
+
+  .btn{
+    font:inherit; font-weight:700; font-size:.92rem; border-radius:10px; border:none;
+    padding:12px 16px; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; gap:8px;
+  }
+  .btn-primary{background:var(--primary); color:#fff; width:100%;}
+  .btn-primary:disabled{background:var(--ink-faint); cursor:not-allowed;}
+  .btn-ghost{background:var(--surface-2); color:var(--ink); width:100%;}
+  .btn-accent{background:var(--accent); color:#fff; width:100%;}
+
+  /* --- table --- */
+  .table-wrap{overflow-x:auto; border:1px solid var(--line); border-radius:12px; margin-top:4px;}
+  table{border-collapse:collapse;width:100%;font-size:.78rem;min-width:640px;}
+  th,td{text-align:left;padding:8px 9px;border-bottom:1px solid var(--line);white-space:nowrap;}
+  th{background:var(--primary-soft);color:var(--primary);font-weight:700;font-size:.68rem;text-transform:uppercase;letter-spacing:.03em;}
+  td.mono{font-family:'IBM Plex Mono',monospace;}
+  td.del{cursor:pointer;color:var(--bad);text-align:center;font-weight:700;}
+  .empty-row{color:var(--ink-faint);font-size:.86rem;padding:16px;text-align:center;}
+  .count-pill{font-size:.78rem;font-weight:700;color:var(--primary);background:var(--primary-soft);padding:3px 10px;border-radius:99px;}
+
+  .result-img-wrap{margin-top:12px;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--surface-2);}
+  .result-img-wrap img{width:100%;display:block;}
+
+  footer{max-width:640px;margin:20px auto 0;color:var(--ink-faint);font-size:.76rem;text-align:center;}
+
+  /* bottom sticky bar */
+  .stickybar{
+    position:fixed; left:0; right:0; bottom:0; background:var(--surface); border-top:1px solid var(--line);
+    padding:10px 16px calc(10px + env(safe-area-inset-bottom,0px)); box-shadow:0 -6px 16px -8px rgba(18,33,58,.15);
+    display:flex; gap:10px; z-index:30;
+  }
+  .stickybar .btn{flex:1;}
+
+  [hidden]{display:none !important;}
+  :focus-visible{outline:2px solid var(--primary); outline-offset:2px;}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="kicker"><span class="dot"></span> Migración Colombia · Regional Nariño-Putumayo</div>
+  <h1 class="title">Escáner Migratorio</h1>
+  <p class="subtitle">Escanea el documento, revisa los datos sugeridos y arma la tabla de "Extranjeros identificados" para el boletín, sin escribir cada campo a mano.</p>
+</header>
+
+<main>
+
+  <section class="card" id="captureCard">
+    <h2>1. Escanear documento</h2>
+    <p class="card-lede">Cédula, cédula de extranjería o documento de identidad extranjero.</p>
+
+    <label class="capture-zone" for="fileInput" id="captureZone">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 8V6a2 2 0 0 1 2-2h2M4 16v2a2 2 0 0 0 2 2h2M20 8V6a2 2 0 0 0-2-2h-2M20 16v2a2 2 0 0 1-2 2h-2"/><circle cx="12" cy="12" r="3.2"/></svg>
+      <div class="cta">Tomar foto del documento</div>
+      <div class="hint">o toca aquí para elegir una imagen</div>
+    </label>
+    <input type="file" id="fileInput" accept="image/*" capture="environment">
+
+    <div class="preview-wrap" id="previewWrap" hidden>
+      <img id="previewImg" alt="Documento capturado">
+      <div class="ocr-status" id="ocrStatus">
+        Preparando lector…
+        <div class="bar"><div class="bar-fill" id="ocrBar"></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card" id="formCard" hidden>
+    <h2>2. Revisa y corrige</h2>
+    <p class="card-lede">Los datos con <span class="guess-tag">sugerido</span> vienen del lector automático — verifícalos antes de agregar.</p>
+
+    <div class="field-row">
+      <div class="field"><label for="f_ap1">1er apellido</label><input id="f_ap1" autocomplete="off"></div>
+      <div class="field"><label for="f_ap2">2do apellido</label><input id="f_ap2" autocomplete="off"></div>
+    </div>
+    <div class="field"><label for="f_nombres">Nombres</label><input id="f_nombres" autocomplete="off"></div>
+    <div class="field-row">
+      <div class="field"><label for="f_tipo">Tipo documento</label>
+        <select id="f_tipo">
+          <option>DNI</option><option>C.C.</option><option>C.E.</option><option>PPT</option><option>Pasaporte</option>
+        </select>
+      </div>
+      <div class="field"><label for="f_num">Número documento</label><input id="f_num" autocomplete="off" inputmode="numeric"></div>
+    </div>
+    <div class="field-row">
+      <div class="field"><label for="f_fecha">Fecha nacimiento</label><input id="f_fecha" placeholder="DD/MM/AAAA" autocomplete="off"></div>
+      <div class="field"><label for="f_sexo">Sexo</label>
+        <select id="f_sexo"><option value="M">M</option><option value="F">F</option></select>
+      </div>
+    </div>
+    <div class="field"><label for="f_pais">País de nacionalidad</label><input id="f_pais" autocomplete="off"></div>
+
+    <details class="raw-ocr" id="rawOcrDetails" hidden>
+      <summary>Ver texto crudo leído del documento</summary>
+      <pre id="rawOcrText"></pre>
+    </details>
+
+    <button class="btn btn-primary" id="addRowBtn" style="margin-top:14px;">Agregar a la tabla</button>
+    <button class="btn btn-ghost" id="cancelRowBtn" style="margin-top:8px;">Descartar y escanear otro</button>
+  </section>
+
+  <section class="card" id="tableCard">
+    <h2>3. Extranjeros identificados <span class="count-pill" id="countPill">0</span></h2>
+    <p class="card-lede">Así queda la tabla que se pega en el boletín.</p>
+    <div class="table-wrap">
+      <table id="peopleTable">
+        <thead>
+          <tr>
+            <th>1 apellido</th><th>2 apellido</th><th>Nombres</th><th>Tipo doc.</th>
+            <th>Número<br>documento</th><th>Fecha<br>nacimiento</th><th>Sexo</th><th>País de nacionalidad</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="tableBody"></tbody>
+      </table>
+    </div>
+    <div class="empty-row" id="emptyRow">Aún no has agregado a nadie — escanea el primer documento arriba.</div>
+
+    <div class="result-img-wrap" id="resultImgWrap" hidden>
+      <img id="resultImg" alt="Tabla generada">
+    </div>
+  </section>
+
+  <footer>Los datos se procesan en este mismo celular — no se envían a ningún servidor. Prototipo interno, Regional Nariño-Putumayo.</footer>
+</main>
+
+<div class="stickybar">
+  <button class="btn btn-ghost" id="clearAllBtn">Vaciar tabla</button>
+  <button class="btn btn-accent" id="generateBtn">Generar imagen</button>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+<script>
+(function(){
+  'use strict';
+
+  var STORE_KEY = 'escaner_migratorio_rows_v1';
+  var people = [];
+  try { people = JSON.parse(localStorage.getItem(STORE_KEY)) || []; } catch(e) { people = []; }
+
+  var fileInput = document.getElementById('fileInput');
+  var previewWrap = document.getElementById('previewWrap');
+  var previewImg = document.getElementById('previewImg');
+  var ocrStatus = document.getElementById('ocrStatus');
+  var ocrBar = document.getElementById('ocrBar');
+  var formCard = document.getElementById('formCard');
+  var rawOcrDetails = document.getElementById('rawOcrDetails');
+  var rawOcrText = document.getElementById('rawOcrText');
+  var addRowBtn = document.getElementById('addRowBtn');
+  var cancelRowBtn = document.getElementById('cancelRowBtn');
+  var tableBody = document.getElementById('tableBody');
+  var emptyRow = document.getElementById('emptyRow');
+  var countPill = document.getElementById('countPill');
+  var clearAllBtn = document.getElementById('clearAllBtn');
+  var generateBtn = document.getElementById('generateBtn');
+  var resultImgWrap = document.getElementById('resultImgWrap');
+  var resultImg = document.getElementById('resultImg');
+
+  var fields = {
+    ap1: document.getElementById('f_ap1'),
+    ap2: document.getElementById('f_ap2'),
+    nombres: document.getElementById('f_nombres'),
+    tipo: document.getElementById('f_tipo'),
+    num: document.getElementById('f_num'),
+    fecha: document.getElementById('f_fecha'),
+    sexo: document.getElementById('f_sexo'),
+    pais: document.getElementById('f_pais')
+  };
+
+  function saveRows(){
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(people)); } catch(e){}
+  }
+
+  function renderTable(){
+    tableBody.innerHTML = '';
+    people.forEach(function(p, idx){
+      var tr = document.createElement('tr');
+      var cells = [p.ap1, p.ap2, p.nombres, p.tipo, p.num, p.fecha, p.sexo, p.pais];
+      cells.forEach(function(val, i){
+        var td = document.createElement('td');
+        if (i === 4) td.className = 'mono';
+        td.textContent = val || '';
+        tr.appendChild(td);
+      });
+      var delTd = document.createElement('td');
+      delTd.className = 'del';
+      delTd.textContent = '✕';
+      delTd.addEventListener('click', function(){
+        people.splice(idx, 1);
+        saveRows();
+        renderTable();
+      });
+      tr.appendChild(delTd);
+      tableBody.appendChild(tr);
+    });
+    countPill.textContent = people.length;
+    emptyRow.hidden = people.length > 0;
+    resultImgWrap.hidden = true;
+  }
+
+  // ---- OCR heuristics ----
+  var COUNTRY_LIST = ['VENEZUELA','ECUADOR','PERU','PERÚ','COLOMBIA','BOLIVIA','CHILE','ARGENTINA','BRASIL','CUBA','HAITI','HAITÍ','PANAMA','PANAMÁ','MEXICO','MÉXICO','REPUBLICA DOMINICANA','ESTADOS UNIDOS'];
+
+  function guessFromText(text){
+    var upper = text.toUpperCase();
+    var guess = { ap1:'', ap2:'', nombres:'', num:'', fecha:'', sexo:'', pais:'' };
+
+    // documento: grupo de digitos mas largo (6 a 12 digitos, ignorando fechas)
+    var digitGroups = upper.match(/\d[\d.\-]{4,12}\d/g) || [];
+    var bestNum = '';
+    digitGroups.forEach(function(g){
+      var clean = g.replace(/[.\-]/g,'');
+      if (clean.length >= 6 && clean.length <= 12 && !/^\d{2}[\/\-.]\d{2}[\/\-.]\d{2,4}$/.test(g)) {
+        if (clean.length > bestNum.replace(/[.\-]/g,'').length) bestNum = g;
+      }
+    });
+    guess.num = bestNum;
+
+    // fecha
+    var fechaMatch = upper.match(/(\d{2})[\/\-.](\d{2})[\/\-.](\d{2,4})/);
+    if (fechaMatch) {
+      var yr = fechaMatch[3].length === 2 ? '19' + fechaMatch[3] : fechaMatch[3];
+      guess.fecha = fechaMatch[1] + '/' + fechaMatch[2] + '/' + yr;
+    }
+
+    // sexo
+    if (/\bF\b|FEMENINO/.test(upper)) guess.sexo = 'F';
+    else if (/\bM\b|MASCULINO/.test(upper)) guess.sexo = 'M';
+
+    // pais
+    for (var i=0;i<COUNTRY_LIST.length;i++){
+      if (upper.indexOf(COUNTRY_LIST[i]) !== -1) { guess.pais = COUNTRY_LIST[i].replace('PERÚ','Perú').replace('MÉXICO','México').replace('PANAMÁ','Panamá').replace('HAITÍ','Haití'); if(guess.pais===COUNTRY_LIST[i]) guess.pais = toTitleCase(COUNTRY_LIST[i]); break; }
+    }
+
+    // apellidos / nombres a partir de etiquetas tipo cedula venezolana
+    var apMatch = upper.match(/APELLIDOS?\s*\n?\s*([A-ZÑÁÉÍÓÚ\s]{3,40}?)(?:\n|NOMBRES?)/);
+    if (apMatch) {
+      var apParts = apMatch[1].trim().split(/\s+/);
+      guess.ap1 = toTitleCase(apParts[0] || '');
+      guess.ap2 = toTitleCase(apParts.slice(1).join(' ') || '');
+    }
+    var noMatch = upper.match(/NOMBRES?\s*\n?\s*([A-ZÑÁÉÍÓÚ\s]{3,40}?)(?:\n|$|\d)/);
+    if (noMatch) {
+      guess.nombres = toTitleCase(noMatch[1].trim());
+    }
+
+    return guess;
+  }
+
+  function toTitleCase(s){
+    return s.toLowerCase().replace(/(^|\s)([a-zñáéíóú])/g, function(m, sp, ch){ return sp + ch.toUpperCase(); });
+  }
+
+  function fillForm(guess){
+    fields.ap1.value = guess.ap1 || '';
+    fields.ap2.value = guess.ap2 || '';
+    fields.nombres.value = guess.nombres || '';
+    fields.num.value = (guess.num || '').replace(/[.\-]/g,'');
+    fields.fecha.value = guess.fecha || '';
+    fields.sexo.value = guess.sexo === 'F' ? 'F' : 'M';
+    fields.pais.value = guess.pais || '';
+    fields.tipo.value = 'DNI';
+  }
+
+  function clearForm(){
+    Object.keys(fields).forEach(function(k){ if (fields[k].tagName==='INPUT') fields[k].value=''; });
+    fields.sexo.value = 'M';
+    fields.tipo.value = 'DNI';
+  }
+
+  // ---- captura + OCR ----
+  var worker = null;
+  async function getWorker(){
+    if (!worker) {
+      ocrStatus.textContent = 'Descargando lector de texto (solo la primera vez)…';
+      worker = await Tesseract.createWorker('spa', 1, {
+        logger: function(m){
+          if (m.status === 'recognizing text') {
+            ocrBar.style.width = Math.round(m.progress*100) + '%';
+            ocrStatus.innerHTML = 'Leyendo documento… ' + Math.round(m.progress*100) + '%<div class="bar"><div class="bar-fill" id="ocrBar2" style="width:'+Math.round(m.progress*100)+'%"></div></div>';
+          }
+        }
+      });
+    }
+    return worker;
+  }
+
+  fileInput.addEventListener('change', async function(){
+    var file = fileInput.files[0];
+    if (!file) return;
+    var url = URL.createObjectURL(file);
+    previewImg.src = url;
+    previewWrap.hidden = false;
+    formCard.hidden = true;
+    ocrStatus.className = 'ocr-status';
+    ocrStatus.textContent = 'Preparando lector…';
+    ocrBar.style.width = '0%';
+
+    try {
+      var w = await getWorker();
+      var result = await w.recognize(file);
+      var text = result.data.text || '';
+      ocrStatus.className = 'ocr-status done';
+      ocrStatus.textContent = '✓ Lectura lista — revisa los campos abajo.';
+
+      var guess = guessFromText(text);
+      clearForm();
+      fillForm(guess);
+      rawOcrText.textContent = text.trim() || '(no se detectó texto)';
+      rawOcrDetails.hidden = false;
+      formCard.hidden = false;
+      formCard.scrollIntoView({behavior:'smooth', block:'start'});
+    } catch(err){
+      ocrStatus.className = 'ocr-status err';
+      ocrStatus.textContent = 'No se pudo leer automáticamente. Llena los datos a mano.';
+      clearForm();
+      rawOcrDetails.hidden = true;
+      formCard.hidden = false;
+      formCard.scrollIntoView({behavior:'smooth', block:'start'});
+    }
+    fileInput.value = '';
+  });
+
+  addRowBtn.addEventListener('click', function(){
+    var row = {
+      ap1: fields.ap1.value.trim(),
+      ap2: fields.ap2.value.trim(),
+      nombres: fields.nombres.value.trim(),
+      tipo: fields.tipo.value,
+      num: fields.num.value.trim(),
+      fecha: fields.fecha.value.trim(),
+      sexo: fields.sexo.value,
+      pais: fields.pais.value.trim()
+    };
+    if (!row.ap1 && !row.nombres && !row.num) {
+      alert('Completa al menos el apellido, el nombre o el número de documento.');
+      return;
+    }
+    people.push(row);
+    saveRows();
+    renderTable();
+    formCard.hidden = true;
+    previewWrap.hidden = true;
+    tableBody.parentElement.parentElement.scrollIntoView({behavior:'smooth', block:'center'});
+  });
+
+  cancelRowBtn.addEventListener('click', function(){
+    formCard.hidden = true;
+    previewWrap.hidden = true;
+  });
+
+  clearAllBtn.addEventListener('click', function(){
+    if (people.length === 0) return;
+    if (!confirm('¿Vaciar toda la tabla? Esto no se puede deshacer.')) return;
+    people = [];
+    saveRows();
+    renderTable();
+  });
+
+  // ---- generar imagen de la tabla ----
+  generateBtn.addEventListener('click', function(){
+    if (people.length === 0) {
+      alert('Agrega al menos una persona antes de generar la imagen.');
+      return;
+    }
+    var headers = ['1 apellido','2 apellido','Nombres','Tipo documento','Numero\nDocumento','Fecha\nNacimiento','Sexo','País de nacionalidad'];
+    var colWidths = [140,140,190,110,150,140,70,170];
+    var scale = 2;
+    var rowH = 34, headH = 46, padX = 10;
+    var totalW = colWidths.reduce(function(a,b){return a+b;},0);
+    var totalH = headH + rowH*people.length;
+
+    var canvas = document.createElement('canvas');
+    canvas.width = totalW*scale; canvas.height = totalH*scale;
+    var ctx = canvas.getContext('2d');
+    ctx.scale(scale,scale);
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0,0,totalW,totalH);
+
+    ctx.font = '700 12px Arial';
+    ctx.fillStyle = '#12213A';
+    ctx.textBaseline = 'middle';
+
+    // header row
+    var x = 0;
+    ctx.fillStyle = '#E4EBF5';
+    ctx.fillRect(0,0,totalW,headH);
+    ctx.fillStyle = '#12213A';
+    headers.forEach(function(h, i){
+      var lines = h.split('\n');
+      var ly = headH/2 - (lines.length-1)*6;
+      lines.forEach(function(line){
+        ctx.fillText(line, x+padX, ly);
+        ly += 13;
+      });
+      x += colWidths[i];
+    });
+
+    // borders + data rows
+    ctx.strokeStyle = '#DCE2EA';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(0.5,0.5,totalW-1,totalH-1);
+    // vertical lines
+    var vx = 0;
+    colWidths.forEach(function(w){
+      vx += w;
+      ctx.beginPath(); ctx.moveTo(vx,0); ctx.lineTo(vx,totalH); ctx.stroke();
+    });
+    ctx.beginPath(); ctx.moveTo(0,headH); ctx.lineTo(totalW,headH); ctx.stroke();
+
+    ctx.font = '400 12px Arial';
+    people.forEach(function(p, ri){
+      var y = headH + ri*rowH;
+      if (ri % 2 === 1) { ctx.fillStyle = '#F4F6F8'; ctx.fillRect(0,y,totalW,rowH); }
+      ctx.fillStyle = '#12213A';
+      var vals = [p.ap1,p.ap2,p.nombres,p.tipo,p.num,p.fecha,p.sexo,p.pais];
+      var cx = 0;
+      vals.forEach(function(v,ci){
+        ctx.fillText(v || '', cx+padX, y+rowH/2);
+        cx += colWidths[ci];
+      });
+      ctx.strokeStyle = '#DCE2EA';
+      ctx.beginPath(); ctx.moveTo(0,y+rowH); ctx.lineTo(totalW,y+rowH); ctx.stroke();
+    });
+
+    var dataUrl = canvas.toDataURL('image/png');
+    resultImg.src = dataUrl;
+    resultImgWrap.hidden = false;
+    resultImgWrap.scrollIntoView({behavior:'smooth', block:'center'});
+
+    canvas.toBlob(async function(blob){
+      var file = new File([blob], 'extranjeros_identificados.png', {type:'image/png'});
+      if (navigator.share && navigator.canShare && navigator.canShare({files:[file]})) {
+        try {
+          await navigator.share({ files:[file], title:'Extranjeros identificados' });
+          return;
+        } catch(e){ /* usuario cancelo o no soportado, cae a descarga */ }
+      }
+      var a = document.createElement('a');
+      a.href = dataUrl;
+      a.download = 'extranjeros_identificados.png';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }, 'image/png');
+  });
+
+  renderTable();
+
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js').catch(function(){});
+  }
+})();
+</script>
+
+</body>
+</html>
