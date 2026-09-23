@@ -63,9 +63,10 @@
   .crop-actions{display:flex;gap:10px;margin-top:12px;}
   .crop-actions .btn{flex:1;}
 
-  .preview-wrap{display:flex;gap:12px;align-items:flex-start;margin-top:12px;}
-  #previewImg{width:96px;height:96px;object-fit:cover;border-radius:10px;border:1px solid var(--line);flex:none;background:var(--surface-2);}
-  .ocr-status{flex:1;font-size:.86rem;color:var(--ink-soft);}
+  .preview-wrap{display:flex;flex-direction:column;gap:10px;margin-top:12px;}
+  .preview-label{font-size:.74rem;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:var(--ink-faint);}
+  #previewImg{width:100%;max-height:340px;object-fit:contain;border-radius:10px;border:1px solid var(--line);background:#000;}
+  .ocr-status{font-size:.86rem;color:var(--ink-soft);}
   .ocr-status .bar{height:6px;border-radius:99px;background:var(--surface-2);overflow:hidden;margin-top:6px;}
   .ocr-status .bar-fill{height:100%;background:var(--primary);width:0%;transition:width .25s;}
   .ocr-status.done{color:var(--good);font-weight:600;}
@@ -145,7 +146,8 @@
     <input type="file" id="fileInput" accept="image/*" capture="environment">
 
     <div class="preview-wrap" id="previewWrap" hidden>
-      <img id="previewImg" alt="Documento capturado">
+      <p class="preview-label">Esto es exactamente lo que se manda a leer (recortado y en blanco/negro) — revisa si el texto se alcanza a leer aquí mismo:</p>
+      <img id="previewImg" alt="Documento capturado, recortado y en blanco y negro">
       <div class="ocr-status" id="ocrStatus">
         Preparando lector…
         <div class="bar"><div class="bar-fill" id="ocrBar"></div></div>
@@ -226,7 +228,7 @@
 
   <footer>
     Los datos se procesan en este mismo celular — no se envían a ningún servidor. Prototipo interno, Regional Nariño-Putumayo.<br>
-    <span class="mono" id="buildTag" style="font-size:.7rem;">build 2026-09-23f</span>
+    <span class="mono" id="buildTag" style="font-size:.7rem;">build 2026-09-23g</span>
     · <a href="#" id="resetCacheLink">Limpiar caché de la app</a>
   </footer>
 </main>
@@ -610,7 +612,10 @@
     return threshold;
   }
 
-  function preprocessCanvas(canvas){
+  // separa el paso comun (escala de grises + histograma) de los dos modos de
+  // preprocesamiento, para poder generar ambas variantes del MISMO recorte sin
+  // tener que pedirle a la persona que vuelva a recortar.
+  function computeGrayscale(canvas){
     var ctx = canvas.getContext('2d');
     var w = canvas.width, h = canvas.height;
     var imgData = ctx.getImageData(0,0,w,h);
@@ -632,12 +637,48 @@
       gray[p] = v;
       hist[v]++;
     }
-    var threshold = otsuThreshold(hist, n);
-    for (i=0, p=0; i<d.length; i+=4, p++){
-      var bw = gray[p] > threshold ? 255 : 0;
-      d[i]=d[i+1]=d[i+2]=bw;
+    return { ctx:ctx, imgData:imgData, d:d, gray:gray, hist:hist, n:n };
+  }
+
+  function applyOtsu(gs){
+    var threshold = otsuThreshold(gs.hist, gs.n);
+    for (var i=0,p=0; i<gs.d.length; i+=4,p++){
+      var bw = gs.gray[p] > threshold ? 255 : 0;
+      gs.d[i]=gs.d[i+1]=gs.d[i+2]=bw;
     }
-    ctx.putImageData(imgData,0,0);
+    gs.ctx.putImageData(gs.imgData,0,0);
+  }
+
+  function applyContrastOnly(gs){
+    for (var i=0,p=0; i<gs.d.length; i+=4,p++){
+      var v = (gs.gray[p]-128)*1.3+128;
+      v = Math.max(0, Math.min(255, v));
+      gs.d[i]=gs.d[i+1]=gs.d[i+2]=v;
+    }
+    gs.ctx.putImageData(gs.imgData,0,0);
+  }
+
+  // texto que en su mayoria NO son letras reales suele ser ruido del OCR, no un
+  // documento leido correctamente - se usa para decidir si vale la pena reintentar
+  // con el otro modo de preprocesamiento.
+  function looksLikeGarbage(text){
+    var clean = text.replace(/\s/g,'');
+    if (clean.length < 5) return true;
+    var letters = (clean.match(/[A-Za-zÁÉÍÓÚÑáéíóúñ]/g) || []).length;
+    return (letters/clean.length) < 0.45;
+  }
+
+  var lastCropParams = null; // {img,sx,sy,sw,sh,outW,outH} del ultimo recorte confirmado, para poder reintentar con otro modo sin recortar de nuevo
+
+  function buildVariantBlob(mode, cb){
+    var p = lastCropParams;
+    var out = document.createElement('canvas');
+    out.width = p.outW; out.height = p.outH;
+    var octx = out.getContext('2d');
+    octx.drawImage(p.img, p.sx, p.sy, p.sw, p.sh, 0, 0, out.width, out.height);
+    var gs = computeGrayscale(out);
+    if (mode === 'otsu') applyOtsu(gs); else applyContrastOnly(gs);
+    out.toBlob(function(blob){ cb(blob); }, 'image/png');
   }
 
   cropConfirmBtn.addEventListener('click', function(){
@@ -645,20 +686,14 @@
     var sy = cropRect.y / cropCanvas.height * cropImgEl.naturalHeight;
     var sw = cropRect.w / cropCanvas.width * cropImgEl.naturalWidth;
     var sh = cropRect.h / cropCanvas.height * cropImgEl.naturalHeight;
-
-    var out = document.createElement('canvas');
     var targetW = Math.min(1800, Math.max(sw, 900));
     var outScale = targetW / sw;
-    out.width = Math.round(sw*outScale);
-    out.height = Math.round(sh*outScale);
-    var octx = out.getContext('2d');
-    octx.drawImage(cropImgEl, sx,sy,sw,sh, 0,0, out.width, out.height);
-    preprocessCanvas(out);
+    lastCropParams = { img: cropImgEl, sx:sx, sy:sy, sw:sw, sh:sh, outW: Math.round(sw*outScale), outH: Math.round(sh*outScale) };
 
-    out.toBlob(function(blob){
-      cropCard.hidden = true;
+    cropCard.hidden = true;
+    buildVariantBlob('otsu', function(blob){
       processCapturedFile(new File([blob], 'recorte.png', {type:'image/png'}));
-    }, 'image/png');
+    });
   });
 
   cropCancelBtn.addEventListener('click', function(){
@@ -706,6 +741,24 @@
       var w = await getWorker();
       var result = await w.recognize(file);
       var text = result.data.text || '';
+      var usedRetry = false;
+
+      // si el resultado parece ruido y venimos del flujo de recorte, reintenta una vez
+      // con el otro modo de preprocesamiento (contraste sin binarizar) sobre el MISMO
+      // recorte, sin pedirle a la persona que vuelva a tomar/recortar la foto
+      if (looksLikeGarbage(text) && lastCropParams) {
+        ocrStatus.textContent = 'El primer intento no se ve claro, probando con otro método…';
+        var text2 = await new Promise(function(resolve){
+          buildVariantBlob('contrast', async function(blob2){
+            try {
+              var result2 = await w.recognize(blob2);
+              resolve(result2.data.text || '');
+            } catch(e2){ resolve(''); }
+          });
+        });
+        if (!looksLikeGarbage(text2) || text2.length > text.length) { text = text2; usedRetry = true; }
+      }
+
       sideCount += 1;
       currentOcrText = isFirstSide ? text : (currentOcrText + '\n\n--- OTRO LADO ---\n\n' + text);
 
@@ -716,9 +769,12 @@
       if (text.trim().length < 5) {
         ocrStatus.className = 'ocr-status err';
         ocrStatus.textContent = '⚠ El lector no encontró texto legible en la foto (revisa enfoque/luz). Llena los datos a mano.';
+      } else if (looksLikeGarbage(text)) {
+        ocrStatus.className = 'ocr-status err';
+        ocrStatus.textContent = '⚠ El texto leído no parece confiable (revisa el recorte). Llena/corrige los datos a mano.';
       } else {
         ocrStatus.className = 'ocr-status done';
-        ocrStatus.textContent = '✓ Lectura lista — revisa los campos abajo.';
+        ocrStatus.textContent = usedRetry ? '✓ Lectura lista (con el segundo método) — revisa los campos abajo.' : '✓ Lectura lista — revisa los campos abajo.';
       }
 
       rawOcrText.textContent = currentOcrText.trim() || '(no se detectó ningún texto en la imagen)';
