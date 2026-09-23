@@ -236,7 +236,7 @@
 
   <footer>
     Los datos se procesan en este mismo celular — no se envían a ningún servidor. Prototipo interno, Regional Nariño-Putumayo.<br>
-    <span class="mono" id="buildTag" style="font-size:.7rem;">build 2026-09-24b</span>
+    <span class="mono" id="buildTag" style="font-size:.7rem;">build 2026-09-24c</span>
     · <a href="#" id="resetCacheLink">Limpiar caché de la app</a>
   </footer>
 </main>
@@ -326,28 +326,6 @@
   // ---- OCR heuristics ----
   var COUNTRY_LIST = ['VENEZUELA','ECUADOR','PERU','PERÚ','COLOMBIA','BOLIVIA','CHILE','ARGENTINA','BRASIL','CUBA','HAITI','HAITÍ','PANAMA','PANAMÁ','MEXICO','MÉXICO','REPUBLICA DOMINICANA','ESTADOS UNIDOS'];
 
-  // Busca una etiqueta (ej. "APELLIDOS") en el texto y devuelve lo que sigue hasta
-  // la siguiente etiqueta conocida, un numero largo, o un doble salto de linea.
-  // Tolerante a ":" "-" y otros caracteres que el OCR suele meter entre la etiqueta y el dato.
-  function findLabelValue(text, labelRegex, stopRegex, maxLen){
-    var m = labelRegex.exec(text);
-    if (!m) return '';
-    var start = m.index + m[0].length;
-    return extractValueAfter(text, start, stopRegex, maxLen);
-  }
-
-  function extractValueAfter(text, start, stopRegex, maxLen){
-    var slice = text.slice(start, start + (maxLen || 60));
-    var stop = stopRegex.exec(slice);
-    var raw = stop ? slice.slice(0, stop.index) : slice;
-    raw = raw.replace(/[^A-ZÑÁÉÍÓÚ \n]/g, ' ');
-    // el OCR suele meter ruido entre la etiqueta y el dato real (ej. "NUIP 1.193.385.571"
-    // antes de "MORAN MAYA") - el valor real casi siempre es la ULTIMA linea limpia
-    // antes de la siguiente etiqueta, no la primera.
-    var lines = raw.split('\n').map(function(l){ return l.trim().replace(/\s+/g,' '); }).filter(function(l){ return l.length>1; });
-    return lines.length ? lines[lines.length-1] : '';
-  }
-
   // distancia de edicion (Levenshtein) - cuantas letras hay que cambiar/agregar/quitar
   // para convertir una palabra en otra. Se usa para reconocer una etiqueta aunque el OCR
   // la haya leido mal (ej. "Aperigos" en vez de "Apellidos") o este en otro idioma.
@@ -368,10 +346,52 @@
     return dp[m][n];
   }
 
+  function isCloseTo(word, candidates, maxRatio){
+    for (var i=0;i<candidates.length;i++){
+      var dist = levenshtein(word, candidates[i]);
+      if (dist / Math.max(word.length, candidates[i].length) <= (maxRatio||0.4)) return true;
+    }
+    return false;
+  }
+
+  // TODAS las etiquetas/palabras de "ruido" que pueden aparecer en un documento de
+  // identidad (en varios idiomas) - se usan para reconocer que una linea NO es el valor
+  // que buscamos, sino otra etiqueta o dato distinto, aunque el OCR la haya leido mal.
+  var ALL_LABEL_WORDS = [
+    'APELLIDOS','APELLIDO','SURNAME','SURNAMES','LASTNAME',
+    'NOMBRES','NOMBRE','GIVENNAME','GIVENNAMES','FIRSTNAME',
+    'NACIONALIDAD','NATIONALITY','ESTATURA','HEIGHT','SEXO','SEX',
+    'FECHA','NACIMIENTO','BIRTH','LUGAR','PLACE','EXPEDICION','EXPEDICIÓN',
+    'VENCIMIENTO','EXPIRY','EXPIRATION','REPUBLICA','REPÚBLICA','IDENTIDAD',
+    'CEDULA','CÉDULA','CIUDADANIA','CIUDADANÍA','FIRMA','SIGNATURE','ESTADO','CIVIL','GRUPO'
+  ];
+
+  // Busca una etiqueta (ej. "APELLIDOS") en el texto y devuelve el valor que sigue:
+  // la PRIMERA linea, despues de la etiqueta, que no sea ella misma otra etiqueta
+  // conocida ni una linea de puros numeros (NUIP, fechas, etc.). Esto es mas robusto
+  // que "hasta la siguiente etiqueta", porque no depende de reconocer correctamente
+  // esa siguiente etiqueta (que el OCR tambien puede leer mal).
+  function extractValueAfter(text, start, maxLen, maxLines){
+    var slice = text.slice(start, start + (maxLen || 150));
+    var rawLines = slice.split('\n');
+    var checked = 0;
+    for (var i=0; i<rawLines.length && checked < (maxLines||8); i++){
+      var original = rawLines[i];
+      if (/\d{3,}/.test(original)) continue; // linea con numero largo (documento, fecha, etc.) - no es el valor
+      var cleaned = original.replace(/[^A-ZÑÁÉÍÓÚ \n]/g, ' ').trim().replace(/\s+/g,' ');
+      if (cleaned.length <= 1) continue;
+      checked++;
+      var firstWord = cleaned.split(' ')[0];
+      if (isCloseTo(firstWord, ALL_LABEL_WORDS) || isCloseTo(cleaned, ALL_LABEL_WORDS)) continue; // es otra etiqueta, no el valor
+      return cleaned;
+    }
+    return '';
+  }
+
   // busca, entre TODAS las palabras de 3+ letras del texto, la que mas se parezca a
   // alguna de las etiquetas conocidas (en cualquiera de los idiomas/variantes de la
-  // lista), tolerando hasta ~1/3 de letras distintas - y extrae el valor que sigue.
-  function findFuzzyLabelValue(text, labelWords, stopRegex, maxLen){
+  // lista), tolerando hasta ~40% de letras distintas - y extrae el valor que sigue.
+  function findFuzzyLabelValue(text, labelWords, maxLen){
     var tokenRe = /[A-ZÑÁÉÍÓÚ]{3,}/g;
     var m, best = null;
     while ((m = tokenRe.exec(text))) {
@@ -386,7 +406,7 @@
       }
     }
     if (!best) return '';
-    return extractValueAfter(text, best.end, stopRegex, maxLen);
+    return extractValueAfter(text, best.end, maxLen);
   }
 
   // fecha con mes en letras (ej. "03 DIC 2000", formato estandar de la cedula colombiana)
@@ -501,13 +521,12 @@
       }
     }
 
-    // apellidos / nombres: busca la etiqueta (español o ingles) y toma lo que sigue hasta
-    // la siguiente etiqueta conocida (mucho mas tolerante al ruido del OCR que un regex rigido)
-    var stopWords = /APEL\w*|SURNAME|LAST\s?NAME|NOMBRE\w*|GIVEN\s?NAMES?|FIRST\s?NAME|FECHA\w*|DATE OF BIRTH|NACIMIENTO|BIRTH|NACIONAL\w*|NATIONALITY|SEX(O)?\b|LUGAR|PLACE OF|ESTADO\s?CIVIL|EXPEDIC\w*|VENCIM\w*|EXPIRY|REPUBLICA|IDENTIDAD|\d{2}[\/\-.]\d{2}/;
+    // apellidos / nombres: busca la etiqueta (español o ingles) de forma aproximada y toma
+    // la primera linea de valor real que encuentre despues (ver extractValueAfter arriba)
     if (!guess.ap1) {
-      // busqueda aproximada: tolera que el OCR lea mal la etiqueta (ej. "Apelisdos",
-      // "Aperigos" en vez de "Apellidos") y reconoce variantes en ingles
-      var apRaw = findFuzzyLabelValue(upper, ['APELLIDOS','APELLIDO','SURNAME','SURNAMES','LASTNAME'], stopWords, 60);
+      // tolera que el OCR lea mal la etiqueta (ej. "Apelisdos", "Aperigos" en vez de
+      // "Apellidos") y reconoce variantes en ingles
+      var apRaw = findFuzzyLabelValue(upper, ['APELLIDOS','APELLIDO','SURNAME','SURNAMES','LASTNAME'], 150);
       if (apRaw) {
         var apParts = apRaw.split(/\s+/).filter(Boolean);
         guess.ap1 = toTitleCase(apParts[0] || '');
@@ -515,7 +534,7 @@
       }
     }
     if (!guess.nombres) {
-      var noRaw = findFuzzyLabelValue(upper, ['NOMBRES','NOMBRE','GIVENNAME','GIVENNAMES','FIRSTNAME'], stopWords, 60);
+      var noRaw = findFuzzyLabelValue(upper, ['NOMBRES','NOMBRE','GIVENNAME','GIVENNAMES','FIRSTNAME'], 150);
       if (noRaw) guess.nombres = toTitleCase(noRaw);
     }
 

@@ -1,4 +1,4 @@
-const CACHE = 'escaner-migratorio-v11';
+const CACHE = 'escaner-migratorio-v12';
 const ASSETS = [
   './',
   './index.html',
