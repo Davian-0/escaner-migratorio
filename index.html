@@ -62,6 +62,10 @@
   .crop-canvas-wrap canvas{display:block;width:100%;touch-action:none;}
   .crop-actions{display:flex;gap:10px;margin-top:12px;}
   .crop-actions .btn{flex:1;}
+  .rotate-row{margin-bottom:12px;}
+  .rotate-row label{display:flex;justify-content:space-between;font-size:.82rem;font-weight:600;color:var(--ink-soft);margin-bottom:6px;}
+  .rotate-row label b{color:var(--accent-ink);font-family:'IBM Plex Mono',monospace;}
+  .rotate-row input[type="range"]{width:100%;accent-color:var(--accent);}
 
   .preview-wrap{display:flex;flex-direction:column;gap:10px;margin-top:12px;}
   .preview-label{font-size:.74rem;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:var(--ink-faint);}
@@ -157,7 +161,11 @@
 
   <section class="card" id="cropCard" hidden>
     <h2>Recorta el documento</h2>
-    <p class="crop-hint">Ajusta el recuadro para que quede <b>solo el documento, bien pegado a los bordes</b> — sin mesa ni fondo alrededor. Esto es lo que más mejora la lectura automática.</p>
+    <p class="crop-hint">Primero endereza el documento si quedó girado, luego ajusta el recuadro <b>pegado a los bordes</b> — sin mesa ni fondo alrededor. Un documento en diagonal es la causa más común de que el lector falle.</p>
+    <div class="rotate-row">
+      <label for="rotateSlider"><span>↻ Girar para enderezar</span> <b id="rotateVal">0°</b></label>
+      <input type="range" id="rotateSlider" min="-30" max="30" value="0" step="1">
+    </div>
     <div class="crop-canvas-wrap">
       <canvas id="cropCanvas"></canvas>
     </div>
@@ -228,7 +236,7 @@
 
   <footer>
     Los datos se procesan en este mismo celular — no se envían a ningún servidor. Prototipo interno, Regional Nariño-Putumayo.<br>
-    <span class="mono" id="buildTag" style="font-size:.7rem;">build 2026-09-23g</span>
+    <span class="mono" id="buildTag" style="font-size:.7rem;">build 2026-09-23h</span>
     · <a href="#" id="resetCacheLink">Limpiar caché de la app</a>
   </footer>
 </main>
@@ -252,6 +260,8 @@
   var cropCanvas = document.getElementById('cropCanvas');
   var cropCancelBtn = document.getElementById('cropCancelBtn');
   var cropConfirmBtn = document.getElementById('cropConfirmBtn');
+  var rotateSlider = document.getElementById('rotateSlider');
+  var rotateVal = document.getElementById('rotateVal');
   var previewWrap = document.getElementById('previewWrap');
   var previewImg = document.getElementById('previewImg');
   var ocrStatus = document.getElementById('ocrStatus');
@@ -499,17 +509,36 @@
   var cropImgEl = null;
   var cropRect = {x:0,y:0,w:0,h:0};
   var cropDrag = null;
+  var cropRotation = 0; // grados, se puede ajustar con el control deslizante para enderezar el documento
+  var ROTATE_MARGIN = 1.8; // holgura del canvas para que al rotar (hasta +-30 grados) no se recorten las esquinas
+
+  // dibuja la imagen ORIGINAL centrada y rotada dentro de un canvas de destino
+  // (se usa tanto para la vista previa chica como para el recorte final en alta resolucion)
+  function drawRotatedImage(destCtx, img, destW, destH, baseW, baseH, angleDeg){
+    destCtx.save();
+    destCtx.translate(destW/2, destH/2);
+    destCtx.rotate(angleDeg*Math.PI/180);
+    destCtx.drawImage(img, -baseW/2, -baseH/2, baseW, baseH);
+    destCtx.restore();
+  }
 
   function openCropUI(file){
     var img = new Image();
     img.onload = function(){
       cropImgEl = img;
-      var workingW = Math.min(img.naturalWidth, 1000);
-      var scale = workingW / img.naturalWidth;
-      var workingH = Math.round(img.naturalHeight * scale);
-      cropCanvas.width = workingW;
-      cropCanvas.height = workingH;
-      cropRect = { x: workingW*0.06, y: workingH*0.06, w: workingW*0.88, h: workingH*0.88 };
+      cropRotation = 0;
+      rotateSlider.value = 0;
+      rotateVal.textContent = '0°';
+      var baseW = Math.min(img.naturalWidth, 1000);
+      var scale = baseW / img.naturalWidth;
+      var baseH = Math.round(img.naturalHeight * scale);
+      cropCanvas.width = Math.round(baseW * ROTATE_MARGIN);
+      cropCanvas.height = Math.round(baseH * ROTATE_MARGIN);
+      cropCanvas.dataset.baseW = baseW; cropCanvas.dataset.baseH = baseH;
+      cropRect = {
+        x: cropCanvas.width*0.5 - baseW*0.44, y: cropCanvas.height*0.5 - baseH*0.44,
+        w: baseW*0.88, h: baseH*0.88
+      };
       drawCrop();
       cropCard.hidden = false;
       formCard.hidden = true;
@@ -520,10 +549,17 @@
     img.src = URL.createObjectURL(file);
   }
 
+  rotateSlider.addEventListener('input', function(){
+    cropRotation = parseFloat(rotateSlider.value) || 0;
+    rotateVal.textContent = cropRotation + '°';
+    drawCrop();
+  });
+
   function drawCrop(){
     var ctx = cropCanvas.getContext('2d');
-    ctx.clearRect(0,0,cropCanvas.width,cropCanvas.height);
-    ctx.drawImage(cropImgEl, 0,0, cropCanvas.width, cropCanvas.height);
+    var baseW = Number(cropCanvas.dataset.baseW), baseH = Number(cropCanvas.dataset.baseH);
+    ctx.fillStyle = '#111'; ctx.fillRect(0,0,cropCanvas.width,cropCanvas.height);
+    drawRotatedImage(ctx, cropImgEl, cropCanvas.width, cropCanvas.height, baseW, baseH, cropRotation);
     ctx.fillStyle = 'rgba(0,0,0,0.55)';
     ctx.fillRect(0,0,cropCanvas.width, cropRect.y);
     ctx.fillRect(0,cropRect.y+cropRect.h,cropCanvas.width, cropCanvas.height-(cropRect.y+cropRect.h));
@@ -682,13 +718,20 @@
   }
 
   cropConfirmBtn.addEventListener('click', function(){
-    var sx = cropRect.x / cropCanvas.width * cropImgEl.naturalWidth;
-    var sy = cropRect.y / cropCanvas.height * cropImgEl.naturalHeight;
-    var sw = cropRect.w / cropCanvas.width * cropImgEl.naturalWidth;
-    var sh = cropRect.h / cropCanvas.height * cropImgEl.naturalHeight;
+    // re-dibuja la imagen ORIGINAL (resolucion completa) ya rotada, y recorta de ahi -
+    // asi el resultado final queda derecho y en alta resolucion, no solo la vista previa chica
+    var fullBaseW = cropImgEl.naturalWidth, fullBaseH = cropImgEl.naturalHeight;
+    var fullCanvas = document.createElement('canvas');
+    fullCanvas.width = Math.round(fullBaseW * ROTATE_MARGIN);
+    fullCanvas.height = Math.round(fullBaseH * ROTATE_MARGIN);
+    drawRotatedImage(fullCanvas.getContext('2d'), cropImgEl, fullCanvas.width, fullCanvas.height, fullBaseW, fullBaseH, cropRotation);
+
+    var scaleUp = fullCanvas.width / cropCanvas.width; // mismo margen y misma imagen en ambos canvas -> un solo factor de escala
+    var sx = cropRect.x * scaleUp, sy = cropRect.y * scaleUp;
+    var sw = cropRect.w * scaleUp, sh = cropRect.h * scaleUp;
     var targetW = Math.min(1800, Math.max(sw, 900));
     var outScale = targetW / sw;
-    lastCropParams = { img: cropImgEl, sx:sx, sy:sy, sw:sw, sh:sh, outW: Math.round(sw*outScale), outH: Math.round(sh*outScale) };
+    lastCropParams = { img: fullCanvas, sx:sx, sy:sy, sw:sw, sh:sh, outW: Math.round(sw*outScale), outH: Math.round(sh*outScale) };
 
     cropCard.hidden = true;
     buildVariantBlob('otsu', function(blob){
