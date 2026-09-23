@@ -236,7 +236,7 @@
 
   <footer>
     Los datos se procesan en este mismo celular — no se envían a ningún servidor. Prototipo interno, Regional Nariño-Putumayo.<br>
-    <span class="mono" id="buildTag" style="font-size:.7rem;">build 2026-09-24a</span>
+    <span class="mono" id="buildTag" style="font-size:.7rem;">build 2026-09-24b</span>
     · <a href="#" id="resetCacheLink">Limpiar caché de la app</a>
   </footer>
 </main>
@@ -333,6 +333,10 @@
     var m = labelRegex.exec(text);
     if (!m) return '';
     var start = m.index + m[0].length;
+    return extractValueAfter(text, start, stopRegex, maxLen);
+  }
+
+  function extractValueAfter(text, start, stopRegex, maxLen){
     var slice = text.slice(start, start + (maxLen || 60));
     var stop = stopRegex.exec(slice);
     var raw = stop ? slice.slice(0, stop.index) : slice;
@@ -342,6 +346,47 @@
     // antes de la siguiente etiqueta, no la primera.
     var lines = raw.split('\n').map(function(l){ return l.trim().replace(/\s+/g,' '); }).filter(function(l){ return l.length>1; });
     return lines.length ? lines[lines.length-1] : '';
+  }
+
+  // distancia de edicion (Levenshtein) - cuantas letras hay que cambiar/agregar/quitar
+  // para convertir una palabra en otra. Se usa para reconocer una etiqueta aunque el OCR
+  // la haya leido mal (ej. "Aperigos" en vez de "Apellidos") o este en otro idioma.
+  function levenshtein(a, b){
+    var m = a.length, n = b.length;
+    var dp = new Array(m+1);
+    for (var i=0;i<=m;i++){ dp[i] = new Array(n+1); dp[i][0] = i; }
+    for (var j=0;j<=n;j++) dp[0][j] = j;
+    for (i=1;i<=m;i++){
+      for (j=1;j<=n;j++){
+        dp[i][j] = Math.min(
+          dp[i-1][j]+1,
+          dp[i][j-1]+1,
+          dp[i-1][j-1] + (a[i-1]===b[j-1] ? 0 : 1)
+        );
+      }
+    }
+    return dp[m][n];
+  }
+
+  // busca, entre TODAS las palabras de 3+ letras del texto, la que mas se parezca a
+  // alguna de las etiquetas conocidas (en cualquiera de los idiomas/variantes de la
+  // lista), tolerando hasta ~1/3 de letras distintas - y extrae el valor que sigue.
+  function findFuzzyLabelValue(text, labelWords, stopRegex, maxLen){
+    var tokenRe = /[A-ZÑÁÉÍÓÚ]{3,}/g;
+    var m, best = null;
+    while ((m = tokenRe.exec(text))) {
+      var word = m[0];
+      for (var i=0;i<labelWords.length;i++){
+        var lbl = labelWords[i];
+        var dist = levenshtein(word, lbl);
+        var ratio = dist / Math.max(word.length, lbl.length);
+        if (ratio <= 0.4 && (!best || dist < best.dist)){
+          best = { end: m.index + word.length, dist: dist };
+        }
+      }
+    }
+    if (!best) return '';
+    return extractValueAfter(text, best.end, stopRegex, maxLen);
   }
 
   // fecha con mes en letras (ej. "03 DIC 2000", formato estandar de la cedula colombiana)
@@ -460,8 +505,9 @@
     // la siguiente etiqueta conocida (mucho mas tolerante al ruido del OCR que un regex rigido)
     var stopWords = /APEL\w*|SURNAME|LAST\s?NAME|NOMBRE\w*|GIVEN\s?NAMES?|FIRST\s?NAME|FECHA\w*|DATE OF BIRTH|NACIMIENTO|BIRTH|NACIONAL\w*|NATIONALITY|SEX(O)?\b|LUGAR|PLACE OF|ESTADO\s?CIVIL|EXPEDIC\w*|VENCIM\w*|EXPIRY|REPUBLICA|IDENTIDAD|\d{2}[\/\-.]\d{2}/;
     if (!guess.ap1) {
-      // "APEL" en vez de "APELLID" completo - el OCR a veces lee mal "Apellidos" (ej. "Apelisdos")
-      var apRaw = findLabelValue(upper, /APEL\w*|SURNAME|LAST\s?NAME/, stopWords, 60);
+      // busqueda aproximada: tolera que el OCR lea mal la etiqueta (ej. "Apelisdos",
+      // "Aperigos" en vez de "Apellidos") y reconoce variantes en ingles
+      var apRaw = findFuzzyLabelValue(upper, ['APELLIDOS','APELLIDO','SURNAME','SURNAMES','LASTNAME'], stopWords, 60);
       if (apRaw) {
         var apParts = apRaw.split(/\s+/).filter(Boolean);
         guess.ap1 = toTitleCase(apParts[0] || '');
@@ -469,7 +515,7 @@
       }
     }
     if (!guess.nombres) {
-      var noRaw = findLabelValue(upper, /NOMBRE\w*|GIVEN\s?NAMES?|FIRST\s?NAME/, stopWords, 60);
+      var noRaw = findFuzzyLabelValue(upper, ['NOMBRES','NOMBRE','GIVENNAME','GIVENNAMES','FIRSTNAME'], stopWords, 60);
       if (noRaw) guess.nombres = toTitleCase(noRaw);
     }
 
